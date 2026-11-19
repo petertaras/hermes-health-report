@@ -58,7 +58,7 @@ If a send result is uncertain, the plugin stops. It records the report ID in `de
 
 Actions are offered only in a Graph report, only when approvals are enabled, only to a configured owner who is among the recipients, and only when reply access, the Kanban board and the maintenance profile are all available. The offer becomes active only when the exact report ID is confirmed in Sent Items. Fallback reports offer no actions.
 
-An owner replies from their own mailbox within 72 hours. `approved` on a line by itself approves every listed action, and `approved 2` approves only action 2. Anything else creates nothing. See [Actions and approval rules](docs/approvals.md) for the full rules.
+Keep approvals off until your mail administrator verifies owner authentication for every delivery path. Matching Graph sender addresses does not authenticate an owner. See [Actions and approval rules](docs/approvals.md) for the prerequisite and reply format.
 
 One accepted reply creates at most one Kanban card for the maintenance profile, with an idempotency key derived from the report ID. The card tells the worker which approved command to run and nothing else. Email text is never passed to the worker as instructions. When the card completes, a hook schedules the approved restart, if any, for two minutes after completion, and the poll job emails the result to the approving owner.
 

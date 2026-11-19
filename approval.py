@@ -28,21 +28,22 @@ def parse(text, actions):
     """Accept only a standalone command followed by no unquoted content."""
     if not isinstance(text, str) or len(text) > 16000 or not actions or any(a not in ALLOWED_ACTIONS for a in actions):
         return None
-    lines = text.splitlines()
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
     content = []
-    for line in lines:
-        line = line.strip()
-        if line.startswith('>') or re.match(r'^On .+wrote:\s*$', line, re.I) or re.match(r'^-{2,}\s*(Original Message|Forwarded message)', line, re.I):
-            break
-        if line:
-            content.append(line)
+    for i, line in enumerate(lines):
+        if line.startswith('>'):
+            continue
+        if (i + 1 < len(lines) and lines[i + 1].startswith('>')
+                and re.fullmatch(r'On .+ wrote:', line, re.I)):
+            continue
+        content.append(line)
     if len(content) != 1:
         return None
     match = re.fullmatch(r'approved(?:[ \t]+[0-9]{1,3})*', content[0], re.I | re.ASCII)
     if not match:
         return None
     nums = [int(n) for n in content[0].split()[1:]]
-    if any(n < 1 or n > len(actions) for n in nums):
+    if len(set(nums)) != len(nums) or any(n < 1 or n > len(actions) for n in nums):
         return None
     chosen = [a for i, a in enumerate(actions, 1) if not nums or i in nums]
     return sorted(chosen, key=lambda a: a == 'restart')
@@ -58,6 +59,9 @@ class Store:
                 status TEXT NOT NULL DEFAULT 'active', card_id TEXT, plan TEXT NOT NULL DEFAULT '{}',
                 owner TEXT, selected TEXT, result_state TEXT, restart_state TEXT)''')
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS active_conversation ON offers(mailbox, conversation_id) WHERE status = 'active'")
+            # Do not backfill: older consumed offers may already have run.
+            db.execute('''CREATE TABLE IF NOT EXISTS plugin_approvals (
+                report_id TEXT PRIMARY KEY, claimed INTEGER NOT NULL DEFAULT 0)''')
 
     @contextmanager
     def _connect(self):
@@ -105,6 +109,7 @@ def poll(store, graph, config, enqueue):
         def order(reply):
             return _time(reply.get('receivedDateTime')) or dt.datetime.max.replace(tzinfo=dt.timezone.utc)
         for reply in sorted(replies, key=order):
+            # The deployment must authenticate this address before mail reaches Graph.
             sender = reply.get('sender')
             mailbox = reply.get('mailbox')
             when = _time(reply.get('receivedDateTime'))
@@ -128,5 +133,7 @@ def poll(store, graph, config, enqueue):
                 if not isinstance(card_id, str) or not card_id:
                     raise ValueError('enqueue did not return a card ID')
                 db.execute("UPDATE offers SET status = 'consumed', card_id = ?, owner = ?, selected = ? WHERE report_id = ?", (card_id, sender.lower(), json.dumps(selected), offer['report_id']))
+                if 'plugins' in selected:
+                    db.execute('INSERT INTO plugin_approvals (report_id) VALUES (?)', (offer['report_id'],))
             graph.send('Approval received', '<p>Maintenance card ' + html.escape(card_id) + ' was created.</p>', offer['report_id'], recipients=[sender])
             break

@@ -166,15 +166,16 @@ class Graph:
             anchor = sent.get('internetMessageId')
             if status != 200 or sent.get('id') != sent_id or sent.get('conversationId') != conv or addr.lower() != mailbox.lower() or not anchor:
                 return []
-            query = parse.urlencode({'$filter': "conversationId eq '" + conv.replace("'", "''") + "'", '$select': 'id,conversationId,from,sender,receivedDateTime,uniqueBody,internetMessageHeaders', '$top': '100'})
+            query = parse.urlencode({'$filter': "conversationId eq '" + conv.replace("'", "''") + "'", '$select': 'id,conversationId,from,sender,receivedDateTime,body,internetMessageHeaders', '$top': '100'})
             messages = self._messages('/me/mailFolders/inbox/messages?' + query, token)
             replies = []
             for m in messages:
                 sender = ((m.get('from') or {}).get('emailAddress') or {}).get('address', '')
                 actual_sender = ((m.get('sender') or {}).get('emailAddress') or {}).get('address', '')
-                body = m.get('uniqueBody') or {}
+                body = m.get('body') or {}
                 parents = [str(h.get('value', '')).strip() for h in m.get('internetMessageHeaders', [])
                            if str(h.get('name', '')).lower() == 'in-reply-to']
+                # Address consistency is not owner authentication. See docs/approvals.md.
                 if parents != [anchor] or actual_sender.lower() != sender.lower():
                     continue
                 if m.get('conversationId') != conv or not all(m.get(k) for k in ('id', 'receivedDateTime')) or not sender or sender.lower() == mailbox.lower() or body.get('contentType', '').lower() != 'text' or not isinstance(body.get('content'), str):

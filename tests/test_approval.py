@@ -10,6 +10,14 @@ def test_parser_strict():
         assert parse(text, ['plugins']) is None
 
 
+def test_parser_checks_entire_reply():
+    assert parse('approved\n> history\n\n> more history', ['plugins']) == ['plugins']
+    assert parse('approved\n> history\nPlease wait', ['plugins']) is None
+    assert parse('approved\nOn Tuesday wrote:\n> history\napproved 1', ['plugins']) is None
+    assert parse('approved\n-----Original Message-----\nPrevious report', ['plugins']) is None
+    assert parse('approved 1 1', ['plugins']) is None
+
+
 def test_poll_consumes_once(tmp_path):
     now = dt.datetime.now(dt.timezone.utc)
     sent = dict(mailbox='bot@example.com', id='s1', conversationId='c1', sentDateTime=(now - dt.timedelta(minutes=1)).isoformat())

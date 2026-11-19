@@ -63,12 +63,12 @@ If no vaults are configured, the report reads a vault path from `OBSIDIAN_VAULT_
 
 ## Delivery
 
-- **Graph:** Set `graph_token_helper` to an absolute path or a path relative to the selected profile. Use only a trusted Python file. The plugin imports and runs it. The helper must provide `get_token()` and expose `ENV` and `CACHE` attributes. Before calling `get_token()`, the plugin sets them to `.env` and `secrets/msgraph-delegated.json` in the selected profile. Configure delegated access to identify the user, send mail and read messages. Set `sender` to that mailbox and enable `delivery.graph`. Graph is unavailable without a helper. Check `health-report status` before enabling approvals.
+- **Microsoft Graph:** Set `graph_token_helper` to an absolute path or a path relative to the selected profile. Use only a trusted Python file. The plugin imports and runs it. The helper must provide `get_token()` and expose `ENV` and `CACHE` attributes. Before calling `get_token()`, the plugin sets them to `.env` and `secrets/msgraph-delegated.json` in the selected profile. Configure delegated access to identify the user, send mail and read messages. Set `sender` to that mailbox and enable `delivery.graph`. Microsoft Graph is unavailable without a helper. Check `health-report status` before enabling approvals.
 - **SMTP:** Set `smtp.host`, `smtp.port`, `smtp.security` (`ssl` or `starttls`) and, if needed, `smtp.username`. Put `EMAIL_PASSWORD` in the profile `.env` file. Enable `delivery.smtp`.
 - **Profile:** Set `profile.target` to a `hermes send` destination. Enable `delivery.profile`.
 - **Local:** If no enabled channel accepts the report, the plugin writes a private HTML file in the profile report directory. If a send result is uncertain, it stops instead of trying another channel.
 
-`health-report status` reports whether Graph sending and reply access work, whether the Kanban board and maintenance profile are available, whether a backup unit is configured, which switches are on, and whether an unresolved delivery is recorded.
+`health-report status` reports whether Microsoft Graph sending and reply access work, whether the Kanban board and maintenance profile are available, whether a backup unit is configured, which switches are on, and whether an unresolved delivery is recorded.
 
 ## Schedule and rollback
 

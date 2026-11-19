@@ -1,6 +1,6 @@
 # Actions and approval rules
 
-A report can offer actions only in Graph mail. The plugin requires approvals to be enabled, a configured owner among the recipients, reply access to the mailbox, an existing Kanban board and a maintenance profile. Set `approvals: true` to use this feature.
+A report can offer actions only in Microsoft Graph mail. The plugin requires approvals to be enabled, a configured owner among the recipients, reply access to the mailbox, an existing Kanban board and a maintenance profile. Set `approvals: true` to use this feature.
 
 1. Reply to the original report from a configured owner mailbox within 72 hours of the sent time.
 2. Write `approved` on a line by itself to approve all actions. To approve selected actions, write only their numbers after `approved`. For example, write `approved 2`. To approve more than one, write `approved 2 4`.

@@ -1,10 +1,10 @@
 # Actions and approval rules
 
-**Keep `approvals: false` (the default) until your mail administrator verifies the approval mailbox's sender authentication.** Graph `from` and `sender` agreement, the `owners` list, and reply headers do not prove the owner sent the message. The plugin does not authenticate the owner itself.
+**Keep `approvals: false` (the default) until your mail administrator verifies the approval mailbox's sender authentication.** Microsoft Graph `from` and `sender` agreement, the `owners` list, and reply headers do not prove the owner sent the message. The plugin does not authenticate the owner itself.
 
 Before enabling approvals, verify that the mail system only delivers mail asserting a configured owner address from that authenticated owner. Check external ingress, relays, connectors and delegated send permissions. Domain authentication alone does not prove an individual mailbox identity. If you cannot verify this guarantee for every delivery path, leave approvals off. This does not prevent report delivery.
 
-A report can offer actions only in Graph mail. The plugin also requires a configured owner among the recipients, reply access to the mailbox, an existing Kanban board and a maintenance profile.
+A report can offer actions only in Microsoft Graph mail. The plugin also requires a configured owner among the recipients, reply access to the mailbox, an existing Kanban board and a maintenance profile.
 
 1. Reply to the original report from a configured owner mailbox within 72 hours of the sent time.
 2. Write `approved` on a line by itself to approve all actions. To approve selected actions, write only their numbers after `approved`. For example, write `approved 2`. To approve more than one, write `approved 2 4`.

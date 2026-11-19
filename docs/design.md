@@ -4,7 +4,7 @@ This document records the decisions behind the current implementation. Setup and
 
 ## Configuration in the profile
 
-All settings live in `hermes-health-report/config.yaml` inside the selected Hermes profile directory, along with the report state. Nothing about the instance, its mailboxes or its services is hardcoded in a report. Scheduler, delivery, maintenance and reply approval settings default to off, so installing the plugin changes nothing until an operator configures it. The config file holds no credentials. Graph credentials stay with the delegated token helper, and the SMTP password stays in the profile `.env` file.
+All settings live in `hermes-health-report/config.yaml` inside the selected Hermes profile directory, along with the report state. Nothing about the instance, its mailboxes or its services is hardcoded in a report. Scheduler, delivery, maintenance and reply approval settings default to off, so installing the plugin changes nothing until an operator configures it. The config file holds no credentials. Microsoft Graph credentials stay with the delegated token helper, and the SMTP password stays in the profile `.env` file.
 
 ## Partial reports
 
@@ -32,7 +32,7 @@ The report shows the effective Chromium version and where it came from, and comp
 
 ## Delivery order and uncertain sends
 
-Delivery tries delegated Graph mail first, then SMTP, then a Hermes send target, then a local file. A channel is skipped only on a definite failure or when it is unavailable. When a send result cannot be classified, the run stops and leaves `delivery-pending.json` in place. Sending a second copy through a fallback would be worse than sending none until an operator checks, and an approval offer can only be activated by the copy in Sent Items, so a duplicate report would also create a confusing second offer.
+Delivery tries delegated Microsoft Graph mail first, then SMTP, then a Hermes send target, then a local file. A channel is skipped only on a definite failure or when it is unavailable. When a send result cannot be classified, the run stops and leaves `delivery-pending.json` in place. Sending a second copy through a fallback would be worse than sending none until an operator checks, and an approval offer can only be activated by the copy in Sent Items, so a duplicate report would also create a confusing second offer.
 
 ## Mail approvals
 

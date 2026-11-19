@@ -6,12 +6,18 @@ A Hermes Agent instance runs unattended for most of the week. Backups can fail, 
 
 This plugin collects health facts from the host and from every Hermes profile it can see, and writes them as one HTML report. It can email the report through delegated Microsoft Graph mail, fall back to SMTP or to a Hermes send target, or write a local HTML file. Delivery is off until you turn it on.
 
-A report that goes out by Graph mail can offer a small set of maintenance actions. The mailbox owner replies `approved` to the report, and the plugin creates one Kanban card for the work. Only two actions can ever be offered: updating an allowlisted set of plugins, and restarting one approved Hermes user service after the card completes. Hermes Agent releases, OS packages and Tailscale are reported only. The plugin never updates or restarts them on a mail approval.
+A report that goes out by Microsoft Graph mail can offer a small set of maintenance actions. The mailbox owner replies `approved` to the report, and the plugin creates one Kanban card for the work. Only two actions can ever be offered: updating an allowlisted set of plugins, and restarting one approved Hermes user service after the card completes. Hermes Agent releases, OS packages and Tailscale are reported only. The plugin never updates or restarts them on a mail approval.
 
 Scheduling and maintenance are also opt-in. Nothing runs on a timer until you create the jobs and enable them in the config.
 
 > [!WARNING]
 > **Preview.** This is version 0.1.0, an early preview. Expect breaking changes. Issues and pull requests are welcome.
+
+## What the report looks like
+
+A sample report, split in two and shown side by side. All data in it is invented.
+
+![Sample health report with invented data: summary, then sections for backup, disk, plugins, Hermes Agent release, OS updates, memory and services](docs/images/report-preview.png)
 
 ## Requirements
 
@@ -45,8 +51,8 @@ A dry run writes a private HTML preview and does nothing else. It does not send 
 
 A live run tries delivery in this order:
 
-1. **Graph.** Delegated mail from the configured sender. The subject carries the report ID, and the plugin confirms the exact report in Sent Items.
-2. **SMTP.** Used only when the Graph send fails in a way that proves the message was not accepted, or Graph is unavailable.
+1. **Microsoft Graph.** Delegated mail from the configured sender. The subject carries the report ID, and the plugin confirms the exact report in Sent Items.
+2. **SMTP.** Used only when the Microsoft Graph send fails in a way that proves the message was not accepted, or Microsoft Graph is unavailable.
 3. **Profile.** A `hermes send` target, given the report text on standard input.
 4. **Local.** A private HTML file in the profile report directory.
 
@@ -56,15 +62,15 @@ If a send result is uncertain, the plugin stops. It records the report ID in `de
 
 ## Approvals in brief
 
-Actions are offered only in a Graph report, only when approvals are enabled, only to a configured owner who is among the recipients, and only when reply access, the Kanban board and the maintenance profile are all available. The offer becomes active only when the exact report ID is confirmed in Sent Items. Fallback reports offer no actions.
+Actions are offered only in a Microsoft Graph report, only when approvals are enabled, only to a configured owner who is among the recipients, and only when reply access, the Kanban board and the maintenance profile are all available. The offer becomes active only when the exact report ID is confirmed in Sent Items. Fallback reports offer no actions.
 
-Keep approvals off until your mail administrator verifies owner authentication for every delivery path. Matching Graph sender addresses does not authenticate an owner. See [Actions and approval rules](docs/approvals.md) for the prerequisite and reply format.
+Keep approvals off until your mail administrator verifies owner authentication for every delivery path. Matching Microsoft Graph sender addresses does not authenticate an owner. See [Actions and approval rules](docs/approvals.md) for the prerequisite and reply format.
 
 One accepted reply creates at most one Kanban card for the maintenance profile, with an idempotency key derived from the report ID. The card tells the worker which approved command to run and nothing else. Email text is never passed to the worker as instructions. When the card completes, a hook schedules the approved restart, if any, for two minutes after completion, and the poll job emails the result to the approving owner.
 
 ## Settings
 
-Settings live in `hermes-health-report/config.yaml` inside the selected profile directory. No credentials belong in this file. SMTP passwords go in the profile `.env` file, and Graph credentials stay with the token helper.
+Settings live in `hermes-health-report/config.yaml` inside the selected profile directory. No credentials belong in this file. SMTP passwords go in the profile `.env` file, and Microsoft Graph credentials stay with the token helper.
 
 | Setting | Meaning |
 |---|---|

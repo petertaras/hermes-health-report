@@ -1,0 +1,5 @@
+name: hermes-health-report
+version: 0.1.0
+description: Profile-local health reports and reply approvals for Hermes.
+provides_hooks:
+  - kanban_task_completed

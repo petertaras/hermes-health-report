@@ -30,6 +30,14 @@ from email.message import EmailMessage
 from urllib import error, parse, request
 
 BASE = 'https://graph.microsoft.com/v1.0'
+GRAPH_RESPONSE_BYTES = 1024 * 1024
+GRAPH_LIST_BYTES = 4 * 1024 * 1024
+
+
+class _NoGraphRedirects(request.HTTPRedirectHandler):
+    # urllib normally drains redirect bodies without a size limit.
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 def _enabled(config, key):
@@ -63,18 +71,29 @@ class Graph:
         return mod.get_token()
 
     def _request(self, method, path, token, body=None):
+        status, raw = self._request_bytes(method, path, token, body)
+        return status, json.loads(raw) if raw else {}
+
+    def _request_bytes(self, method, path, token, body=None, *, remaining=None):
         if not path.startswith('/') or path.startswith('//'):
             raise ValueError('invalid Graph path')
+        limit = GRAPH_RESPONSE_BYTES if remaining is None else min(GRAPH_RESPONSE_BYTES, remaining)
         req = request.Request(BASE + path, method=method,
             data=json.dumps(body).encode() if body is not None else None,
             headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json',
                      'Prefer': 'outlook.body-content-type="text", IdType="ImmutableId"'})
         try:
-            with request.urlopen(req, timeout=30) as resp:
-                raw = resp.read()
-                return resp.status, json.loads(raw) if raw else {}
+            with request.build_opener(_NoGraphRedirects()).open(req, timeout=30) as resp:
+                raw = resp.read(limit + 1)
+                if len(raw) > limit:
+                    raise RuntimeError('Graph response byte limit exceeded')
+                # A sized read can return early on EOF with Content-Length still due.
+                if resp.length not in (None, 0):
+                    raise RuntimeError('incomplete Graph response')
+                return resp.status, raw
         except error.HTTPError as exc:
-            return exc.code, {}
+            with exc:
+                return exc.code, b''
 
     def _identity(self, token):
         status, obj = self._request('GET', '/me?$select=mail,userPrincipalName', token)
@@ -99,9 +118,16 @@ class Graph:
 
     def _messages(self, path, token):
         result = []
+        remaining = GRAPH_LIST_BYTES
         for _ in range(20):
-            status, data = self._request('GET', path, token)
-            if status != 200 or not isinstance(data.get('value'), list):
+            if remaining == 0:
+                raise RuntimeError('Graph list byte limit reached')
+            status, raw = self._request_bytes('GET', path, token, remaining=remaining)
+            if status != 200:
+                raise RuntimeError('Graph list failed')
+            remaining -= len(raw)
+            data = json.loads(raw)
+            if not isinstance(data, dict) or not isinstance(data.get('value'), list):
                 raise RuntimeError('Graph list failed')
             result.extend(data['value'])
             next_link = data.get('@odata.nextLink')

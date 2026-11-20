@@ -14,6 +14,8 @@ The reply must be a direct reply in the same conversation. The plugin checks the
 
 A question, a negation, an invalid number, a self-sent message, a message in another conversation, a second reply to a consumed offer, or a reply after 72 hours cannot create a card. No approval is active until the exact report appears in Sent Items. Only the latest confirmed offer for a conversation can be active, and a newer confirmed report for that conversation replaces the older one. Fallback reports never offer actions.
 
+Each Microsoft Graph response has a 1 MiB limit. The conversation pages have a combined 4 MiB limit per reply check. If a limit is exceeded, the plugin discards all replies from that check. It never approves from a partial body or a partial conversation listing.
+
 ## Allowlist
 
 - **Plugin updates:** Set `update_plugins` to the exact plugins to update on the report profile. Linked plugins are skipped without an update attempt, and this plugin never updates itself through an approval. Hermes can refuse pinned or unsafe updates. The result of each update is recorded for the next report.

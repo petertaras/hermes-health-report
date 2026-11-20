@@ -36,7 +36,7 @@ Delivery tries delegated Microsoft Graph mail first, then SMTP, then a Hermes se
 
 ## Mail approvals
 
-An approval is a reply, not a link and not a form. The owner reads the report in their mailbox and replies `approved`, so the approval carries the mailbox identity of the person who sent it. The offer binds the report ID to the mailbox, the sent message and the conversation, and it expires after 72 hours. The plugin accepts one plain-text command line and ignores quoted history, which keeps questions, negations and forwarded copies from being read as approvals.
+An approval is a reply, not a link or a form. The plugin checks the reported address, not the authenticated mailbox identity. Keep approvals off unless the mail system guarantees that identity as described in the [approval rules](approvals.md). The offer binds the report ID to the mailbox, sent message and conversation for 72 hours. The plugin checks the full plain-text reply for a single unquoted command line.
 
 Only two actions can be offered: updating an explicit allowlist of plugins on the report profile, and restarting one named Hermes user service. Hermes Agent releases, OS packages and Tailscale stay report-only, because their updates carry more risk than a mail reply should authorise. The allowlist names plugins on the report profile so that an approval cannot widen its own scope, and the offer stores a snapshot of the maintenance plan. If the settings changed after the report was sent, the offer no longer matches and a new report is needed.
 

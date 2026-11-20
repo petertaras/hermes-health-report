@@ -73,14 +73,30 @@ class GraphTests(unittest.TestCase):
     def test_replies_require_sent_identity_thread_and_text(self):
         offer = {'mailbox': 'bot@example.com', 'id': 's1', 'conversationId': 'c1'}
         self.graph._request = Mock(return_value=(200, {**SENT, 'internetMessageId': '<original@example.com>'}))
-        base = {'id': 'r1', 'conversationId': 'c1', 'receivedDateTime': 'today', 'from': {'emailAddress': {'address': 'owner@example.com'}}, 'uniqueBody': {'contentType': 'text', 'content': 'approved'}}
+        base = {'id': 'r1', 'conversationId': 'c1', 'receivedDateTime': 'today', 'from': {'emailAddress': {'address': 'owner@example.com'}}, 'body': {'contentType': 'text', 'content': 'approved'}}
         base['sender'] = base['from']
         base['internetMessageHeaders'] = [{'name': 'In-Reply-To', 'value': '<original@example.com>'}]
-        self.graph._messages = Mock(return_value=[base, {**base, 'internetMessageHeaders': []}, {**base, 'conversationId': 'other'}, {**base, 'uniqueBody': {'contentType': 'html', 'content': '<p>approved</p>'}}, {**base, 'from': SENT['from']}])
+        self.graph._messages = Mock(return_value=[base, {**base, 'internetMessageHeaders': []}, {**base, 'conversationId': 'other'}, {**base, 'body': {'contentType': 'html', 'content': '<p>approved</p>'}}, {**base, 'from': SENT['from']}])
         self.assertEqual(self.graph.replies(offer), [{'sender': 'owner@example.com', 'id': 'r1', 'conversationId': 'c1', 'receivedDateTime': 'today', 'text': 'approved', 'mailbox': 'bot@example.com'}])
         self.graph._request.return_value = (200, {**SENT, 'conversationId': 'other'})
         self.assertEqual(self.graph.replies(offer), [])
         self.assertEqual(self.graph.replies({**offer, 'mailbox': 'wrong'}), [])
+
+    def test_replies_return_the_full_body(self):
+        offer = {'mailbox': 'bot@example.com', 'id': 's1', 'conversationId': 'c1'}
+        anchor = '<original@example.com>'
+        self.graph._request = Mock(return_value=(200, {**SENT, 'internetMessageId': anchor}))
+        address = {'emailAddress': {'address': 'owner@example.com'}}
+        body = 'approved\n> history\nPlease wait'
+        self.graph._messages = Mock(return_value=[{
+            'id': 'r1', 'conversationId': 'c1', 'receivedDateTime': 'today',
+            'from': address, 'sender': address,
+            'body': {'contentType': 'text', 'content': body},
+            'uniqueBody': {'contentType': 'text', 'content': 'approved'},
+            'internetMessageHeaders': [{'name': 'In-Reply-To', 'value': anchor}],
+        }])
+        self.assertEqual(self.graph.replies(offer)[0]['text'], body)
+        self.assertIn(',body,', self.graph._messages.call_args.args[0].replace('%2C', ','))
 
     def test_preflight_failure_is_definite(self):
         self.graph._identity.return_value = False

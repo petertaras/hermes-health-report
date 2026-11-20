@@ -131,20 +131,56 @@ def _update_plugins(home, names):
     return results
 
 
+def _claim_plugin_update(home, config, report_id):
+    store_path = home / NAME / 'approvals.sqlite3'
+    if not re.fullmatch(r'[0-9a-f]{32}', report_id) or not store_path.is_file() or config.get('approvals') is not True:
+        raise ValueError('No approved maintenance card')
+
+    resolved = _db(config)
+    task_id = os.environ.get('HERMES_KANBAN_TASK')
+    board_db = os.environ.get('HERMES_KANBAN_DB')
+    run_id = os.environ.get('HERMES_KANBAN_RUN_ID')
+    lock = os.environ.get('HERMES_KANBAN_CLAIM_LOCK')
+    if not (resolved and task_id and board_db and run_id and lock):
+        raise ValueError('Run the update from the active Kanban worker')
+    kb, path, board = resolved
+    if board != os.environ.get('HERMES_KANBAN_BOARD') or path.resolve() != Path(board_db).resolve():
+        raise ValueError('Run the update from the approved Kanban board')
+
+    approved_plan = plan(home, config)
+    with approval.Store(store_path)._connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row = db.execute("SELECT * FROM offers WHERE report_id=? AND status='consumed'", (report_id,)).fetchone()
+        if (not row or row['card_id'] != task_id or 'plugins' not in json.loads(row['selected'])
+                or json.loads(row['plan']) != approved_plan):
+            raise ValueError('No approved plugin update for this card')
+
+        # Keep lock order approval -> board, as in poll(). Hold the board writer
+        # lock through the claim commit, not during the external plugin updates.
+        # mode=rw refuses to create a missing board. No board rows are changed.
+        with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=rw', uri=True, timeout=3)) as kanban:
+            kanban.row_factory = sqlite3.Row
+            kanban.execute('BEGIN IMMEDIATE')
+            card = kb.get_task(kanban, task_id)
+            if (not card or card.status != 'running' or card.assignee != approved_plan['worker']
+                    or card.idempotency_key != f'{NAME}:{report_id}' or str(card.current_run_id) != run_id
+                    or card.claim_lock != lock or not card.claim_expires or card.claim_expires <= time.time()):
+                raise ValueError('The approved Kanban card does not have a matching live claim')
+
+            claim = db.execute('UPDATE plugin_approvals SET claimed=1 WHERE report_id=? AND claimed=0', (report_id,))
+            if claim.rowcount != 1:
+                raise ValueError('Plugin approval is unavailable or already claimed. Send a new report.')
+            db.commit()
+    return approved_plan['plugins']
+
+
 def update(home, config, report_id=None):
     if report_id is None:
         if config.get('scheduler') is not True or config.get('maintenance') is not True:
             return
         names = _plugins(config)
     else:
-        path = home / NAME / 'approvals.sqlite3'
-        if not re.fullmatch(r'[0-9a-f]{32}', report_id) or not path.exists() or config.get('approvals') is not True:
-            raise ValueError('No approved maintenance card')
-        with approval.Store(path)._connect() as db:
-            row = db.execute("SELECT * FROM offers WHERE report_id=? AND status='consumed'", (report_id,)).fetchone()
-            if not row or row['card_id'] != os.environ.get('HERMES_KANBAN_TASK') or 'plugins' not in json.loads(row['selected']) or json.loads(row['plan']) != plan(home, config):
-                raise ValueError('No approved plugin update for this card')
-        names = _plugins(config)
+        names = _claim_plugin_update(home, config, report_id)
     results = _update_plugins(home, names)
     root = home / NAME
     root.mkdir(mode=0o700, exist_ok=True)

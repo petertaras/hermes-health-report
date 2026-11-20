@@ -550,6 +550,31 @@ def _memory_health(home, cache):
     return _hindsight_api_health(cfg.get('api_url') or _memory_env(home, 'HINDSIGHT_API_URL') or default, cache)
 
 
+def _http_origin(url):
+    """Return a comparable origin, or None for an ambiguous HTTP URL."""
+    if not isinstance(url, str) or any(ord(c) <= 32 or ord(c) == 127 or c == '\\' for c in url):
+        return None
+    try:
+        parts = urlsplit(url)
+        if (parts.scheme not in ('http', 'https') or not parts.hostname
+                or parts.username is not None or parts.password is not None):
+            return None
+        port = parts.port
+        if port == 0:
+            return None
+        return parts.scheme, parts.hostname, port if port is not None else (443 if parts.scheme == 'https' else 80)
+    except ValueError:
+        return None
+
+
+class _SameOriginRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        origin = _http_origin(req.full_url)
+        if origin is None or origin != _http_origin(newurl):
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _hindsight_api_health(url, cache):
     if not isinstance(url, str) or not url.startswith(('http://', 'https://')):
         return 'info', 'health unavailable; endpoint not configured'
@@ -557,7 +582,7 @@ def _hindsight_api_health(url, cache):
     if endpoint not in cache:
         try:
             request = urllib.request.Request(endpoint, headers={'User-Agent': 'hermes-health-report'})
-            with urllib.request.urlopen(request, timeout=5) as response:
+            with urllib.request.build_opener(_SameOriginRedirect()).open(request, timeout=5) as response:
                 ok = 200 <= response.status < 300
                 data = json.loads(response.read(4096)) if ok else None
             healthy = isinstance(data, dict) and data.get('status') in ('healthy', 'ok')

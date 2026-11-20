@@ -74,7 +74,7 @@ If no vaults are configured, the report reads a vault path from `OBSIDIAN_VAULT_
 
 Run `health-report setup` on the selected profile. It writes wrapper scripts into the profile `scripts` directory and creates or updates three named jobs. Optional maintenance runs at 07:30 on Saturday with an agent. The report runs at 08:30 on Saturday without an agent. The approval poll runs every 15 minutes without an agent. Jobs use the profile time zone.
 
-Preview the report on the profile first, and resolve any open approval offers before you change maintenance settings or switch jobs. Set `scheduler: true` and run setup again to start the jobs. Set `maintenance` or `approvals` to `true` only to enable that job.
+Preview the report on the profile first. Resolve open approval offers before you change maintenance settings or switch jobs. Set `scheduler: true` and run setup again to start the jobs. Set `maintenance: true` only to enable scheduled maintenance. Keep `approvals: false` until your mail administrator verifies the [owner authentication prerequisite](approvals.md).
 
 Setup refuses to replace a wrapper script with different contents, and it refuses to reuse a job name that is bound to a different script.
 

@@ -24,7 +24,7 @@ class MemoryProbeTests(unittest.TestCase):
             response = MagicMock(status=200)
             response.__enter__.return_value = response
             response.read.return_value = b'{"status":"healthy"}'
-            with patch('urllib.request.urlopen', return_value=response) as request:
+            with patch('urllib.request.OpenerDirector.open', return_value=response) as request:
                 rows = probes._memory([], config)
             self.assertEqual(request.call_args.args[0].full_url, 'https://api.example.test/base/health')
             with patch.object(health.probes, 'collect', return_value={'Memory': rows}), \
@@ -42,7 +42,7 @@ class MemoryProbeTests(unittest.TestCase):
             self.assertNotIn('api.example.test', private)
 
     def test_hindsight_rejects_unsafe_report_urls(self):
-        with patch('urllib.request.urlopen') as request:
+        with patch('urllib.request.OpenerDirector.open') as request:
             rows = probes._memory([], {'hindsight': {
                 'web_url': 'javascript:alert(1)', 'api_url': 'https://user:secret@example.test',
             }})
@@ -71,7 +71,7 @@ class MemoryProbeTests(unittest.TestCase):
                 def __enter__(self): return self
                 def __exit__(self, *args): pass
                 def read(self, n): return b'{"status":"ok", "secret":"private"}'
-            with patch('urllib.request.urlopen', return_value=Response()) as request:
+            with patch('urllib.request.OpenerDirector.open', return_value=Response()) as request:
                 rows = probes._memory([(h.name, h) for h in homes], {})
             providers = [r for r in rows if r['item'] == 'Memory provider']
             self.assertEqual([r['status'] for r in providers], ['ok', 'ok'])
@@ -86,7 +86,7 @@ class MemoryProbeTests(unittest.TestCase):
             (home / 'hindsight').mkdir()
             (home / 'config.yaml').write_text('memory:\n  provider: hindsight\n')
             (home / 'hindsight' / 'config.json').write_text(json.dumps({'api_url': 'http://localhost:1234'}))
-            with patch('urllib.request.urlopen', side_effect=OSError('secret')):
+            with patch('urllib.request.OpenerDirector.open', side_effect=OSError('secret')):
                 row = next(r for r in probes._memory([('work', home)], {}) if r['item'] == 'Memory provider')
             self.assertEqual(row['status'], 'warn')
             self.assertNotIn('secret', str(row))

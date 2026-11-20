@@ -101,7 +101,12 @@ Jobs use the profile time zone. All jobs require `scheduler: true`. Scheduled ma
 ## What the plugin accesses
 
 - **Commands:** Collectors run `systemctl`, `journalctl`, `smartctl`, `udisksctl`, `gdbus`, `du`, `docker`, `git`, `apt-get -s`, `snap refresh --list` and version commands for Chromium, `cloudflared` and Tailscale. Python child processes check plugin updates and Chromium. Configured `probes[].argv` run as the report user, including during dry runs. Use trusted read-only commands. Optional delivery runs `hermes send`. Optional maintenance runs `hermes plugins update` for other allowlisted plugins, never for itself. An existing authorised restart can invoke `systemd-run --user` with `systemctl --user restart`.
-- **Network:** Collectors query the GitHub releases API and Chrome for Testing. They check Hindsight `/health` at the configured endpoint or the endpoint selected by Hindsight mode. Hermes plugin update checks may contact configured feeds and upstream repositories. Optional delivery sends report data to the configured SMTP server or Hermes destination. This release does not contact Microsoft Graph. There is no telemetry.
+- **Network:** Collectors query the GitHub releases API and Chrome for Testing. Hermes plugin update checks may contact configured feeds and upstream repositories. Optional delivery sends report data to the configured SMTP server or Hermes destination. This release does not contact Microsoft Graph. There is no telemetry.
+  - **Hindsight:** The report checks `/health` for profiles with `memory.provider: hindsight`. This check runs during scheduled reports and dry runs too. It uses the first JSON object found in the profile's `hindsight/config.json` or `~/.hindsight/config.json`, in that order.
+    - If `api_url` is non-empty, it takes precedence. The check needs an HTTP(S) URL.
+    - Without `api_url`, modes `local_embedded` and `local_external` use `http://localhost:8888/health`. Any other mode or no mode uses the public fallback, `https://api.hindsight.vectorize.io/health`, even without explicit cloud configuration.
+    - If `.env` was the only source of an endpoint override, an upgrade can change the destination. The report no longer reads that override.
+  - If the report settings specify `hindsight.api_url`, the report also checks that endpoint's `/health` path. The Hindsight health checks send no memory content.
 - **Files outside plugin data:** Collectors inspect host mount and disk metadata, OS and APT metadata, the configured backup service journal, Hermes source and Git metadata, profile configuration and plugin manifests, browser caches, Hindsight configuration, and vault filenames and timestamps. They read `MEMORY.md` and `USER.md` only to count characters. Setup writes wrappers into the profile `scripts` directory and updates the cron store. Legacy approval processing reads Kanban board and task state.
 - **Background work and credentials:** Setup registers the jobs above. The completion hook can schedule a one-shot restart for an existing authorised card. The plugin does not start its own daemon or store credentials. It reads its declared secrets through Hermes, not from credential files.
 
@@ -127,6 +132,8 @@ hermes -p example-lab health-report report --kind maintenance --dry-run
 ```
 
 The command prints the preview path. Check the preview, then work through the [setup guide](docs/setup.md).
+
+Hermes installs the plugin's declared PyYAML dependency. You do not need to install PyYAML separately to use the plugin.
 
 Run the tests from the repository root:
 

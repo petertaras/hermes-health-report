@@ -1,9 +1,11 @@
 import io
 import json
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import delivery
@@ -45,15 +47,22 @@ class GraphTests(unittest.TestCase):
         self.assertFalse(graph.available())
         self.assertEqual(graph.send('a', 'b', 'id'), ('definite', None))
 
-    def test_configured_helper_uses_selected_profile_credentials(self):
+    @patch('delivery.request.OpenerDirector.open')
+    def test_legacy_helper_is_not_executed(self, open_graph):
         with TemporaryDirectory() as directory:
             home = Path(directory)
             helper = home / 'example_token.py'
-            helper.write_text('ENV = CACHE = None\ndef get_token():\n    return ENV, CACHE\n', encoding='utf-8')
+            marker = home / 'ran'
+            helper.write_text(f'from pathlib import Path\nPath({str(marker)!r}).touch()\n', encoding='utf-8')
             for path in [helper.name, str(helper)]:
                 with self.subTest(path=path):
                     graph = delivery.Graph(home, {**CFG, 'graph_token_helper': path})
-                    self.assertEqual(graph._token(), (home / '.env', home / 'secrets/msgraph-delegated.json'))
+                    self.assertFalse(graph.available())
+                    self.assertFalse(graph.reply_available())
+                    self.assertEqual(graph.send('Report', 'body', 'abc'), ('definite', None))
+                    self.assertEqual(graph.replies(OFFER), [])
+            self.assertFalse(marker.exists())
+        open_graph.assert_not_called()
 
     def test_send_confirmation_exact_unique(self):
         self.graph._request = Mock(return_value=(202, {}))
@@ -165,6 +174,21 @@ class GraphTests(unittest.TestCase):
 
 
 class FallbackTests(unittest.TestCase):
+    @patch('delivery.smtplib.SMTP')
+    def test_smtp_uses_only_the_scoped_password(self, smtp):
+        smtp.return_value.send_message.return_value = {}
+        cfg = {**CFG, 'smtp': {'host': 'smtp.example.com', 'username': 'bot'}, 'delivery': {'smtp': True}}
+        get_secret = Mock(return_value='scoped-fixture')
+        with patch.dict(sys.modules, {'agent.secret_scope': SimpleNamespace(get_secret=get_secret)}), \
+                patch.dict(delivery.os.environ, {'EMAIL_PASSWORD': 'unscoped-fixture'}):
+            self.assertEqual(delivery.fallback('/x', cfg, 's', '<p>a</p>', 'b'), 'smtp')
+            smtp.return_value.login.assert_called_once_with('bot', 'scoped-fixture')
+            get_secret.assert_called_once_with('EMAIL_PASSWORD')
+            smtp.reset_mock()
+            get_secret.return_value = None
+            self.assertIsNone(delivery.fallback('/x', cfg, 's', '<p>a</p>', 'b'))
+            smtp.assert_not_called()
+
     def test_default_off(self):
         self.assertIsNone(delivery.fallback('/x', {}, 's', 'private', 'redacted'))
 

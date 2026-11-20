@@ -1,5 +1,7 @@
 # Actions and approval rules
 
+Microsoft Graph delivery and new approvals are unavailable in 0.1.1. This page documents the legacy flow. Resolve outstanding cards and offers before upgrading.
+
 **Keep `approvals: false` (the default) until your mail administrator verifies the approval mailbox's sender authentication.** Microsoft Graph `from` and `sender` agreement, the `owners` list, and reply headers do not prove the owner sent the message. The plugin does not authenticate the owner itself.
 
 Before enabling approvals, verify that the mail system only delivers mail asserting a configured owner address from that authenticated owner. Check external ingress, relays, connectors and delegated send permissions. Domain authentication alone does not prove an individual mailbox identity. If you cannot verify this guarantee for every delivery path, leave approvals off. This does not prevent report delivery.

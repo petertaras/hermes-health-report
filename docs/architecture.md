@@ -1,5 +1,7 @@
 # Architecture
 
+The Microsoft Graph paths below describe the legacy flow. Graph delivery and new approvals are unavailable in 0.1.1.
+
 The command-line entry point loads settings from the selected profile, in `hermes-health-report/config.yaml` under the profile directory. State lives in that same directory: previews and local reports, `delivery-pending.json`, `approvals.sqlite3`, `maintenance-latest.json` and the NVMe media error history. No credentials are stored there.
 
 ```mermaid

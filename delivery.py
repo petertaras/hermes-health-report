@@ -1,13 +1,11 @@
 """Delivery transports. All channels require explicit opt-in in delivery.
 
 Settings: sender is a mailbox address; recipients is a list of addresses;
-delivery.graph/smtp/profile are booleans, default false. graph_token_helper
-points to a trusted Python file with a get_token() interface. Its ENV and CACHE
-are scoped to the selected profile. No helper or profile fallback is used.
-Mail.Send and Mail.Read are required.
+delivery.smtp/profile are booleans, default false. Graph delivery and reply
+polling are unavailable until Hermes offers bounded credentialed requests.
 
 SMTP settings live in smtp (host, port, security='starttls' or 'ssl', username)
-and its password is EMAIL_PASSWORD in the profile .env or process environment.
+and its password is EMAIL_PASSWORD from the active Hermes secret scope.
 profile.target is the Hermes send destination; optional profile.command is the
 Hermes executable. Profile delivery uses stdin, not a local report file.
 The caller must provide action-free fallback HTML and must fence ambiguous
@@ -17,10 +15,8 @@ from __future__ import annotations
 
 import html
 from html.parser import HTMLParser
-import importlib.util
 import json
 import os
-from pathlib import Path
 import re
 import smtplib
 import ssl
@@ -30,6 +26,7 @@ from email.message import EmailMessage
 from urllib import error, parse, request
 
 BASE = 'https://graph.microsoft.com/v1.0'
+GRAPH_UNAVAILABLE_REASON = 'No bounded Hermes credentialed request route for Microsoft Graph'
 GRAPH_RESPONSE_BYTES = 1024 * 1024
 GRAPH_LIST_BYTES = 4 * 1024 * 1024
 
@@ -50,25 +47,12 @@ def _addresses(value):
 
 class Graph:
     def __init__(self, home, config):
-        self.home, self.config = Path(home), config
+        self.config = config
         self.sender = config.get('sender', '')
-        helper = config.get('graph_token_helper')
-        self.helper = self.home / helper if isinstance(helper, str) and helper.strip() else None
 
     def _token(self):
-        if self.helper is None or not self.helper.is_file():
-            raise RuntimeError('Graph helper unavailable')
-        spec = importlib.util.spec_from_file_location('_health_graph_token', self.helper)
-        if spec is None or spec.loader is None:
-            raise RuntimeError('Graph helper unavailable')
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        # Bind the helper to this profile before requesting a token.
-        if not hasattr(mod, 'ENV') or not hasattr(mod, 'CACHE'):
-            raise RuntimeError('unsupported Graph token helper')
-        mod.ENV = self.home / '.env'
-        mod.CACHE = self.home / 'secrets/msgraph-delegated.json'
-        return mod.get_token()
+        # Do not fall back to the legacy helper or weaken the reply byte limits.
+        raise RuntimeError(GRAPH_UNAVAILABLE_REASON)
 
     def _request(self, method, path, token, body=None):
         status, raw = self._request_bytes(method, path, token, body)
@@ -238,19 +222,19 @@ def _smtp(home, config, subject, content):
         security = settings.get('security', 'starttls')
         if security not in ('ssl', 'starttls'):
             return None
+        username = settings.get('username')
+        password = None
+        if username:
+            from agent.secret_scope import get_secret
+            password = get_secret('EMAIL_PASSWORD')
+            if not password:
+                return None
         port = int(settings.get('port', 465 if security == 'ssl' else 587))
         client = (smtplib.SMTP_SSL(settings['host'], port, timeout=30, context=ssl.create_default_context())
                   if security == 'ssl' else smtplib.SMTP(settings['host'], port, timeout=30))
         try:
             if security == 'starttls': client.starttls(context=ssl.create_default_context())
-            username = settings.get('username')
-            if username:
-                password = os.environ.get('EMAIL_PASSWORD')
-                if password is None:
-                    # Read only this profile's secret, without printing it.
-                    from dotenv import dotenv_values
-                    password = dotenv_values(Path(home) / '.env').get('EMAIL_PASSWORD')
-                if not password: return None
+            if username and password:
                 client.login(username, password)
             try:
                 refused = client.send_message(msg)

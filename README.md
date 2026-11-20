@@ -4,14 +4,14 @@ A Hermes Agent instance runs unattended for most of the week. Backups can fail, 
 
 ## Purpose
 
-This plugin collects health facts from the host and from every Hermes profile it can see, and writes them as one HTML report. It can email the report through delegated Microsoft Graph mail, fall back to SMTP or to a Hermes send target, or write a local HTML file. Delivery is off until you turn it on.
+This plugin collects health facts from the host and from every Hermes profile it can see, and writes them as one HTML report. It can send through SMTP or a Hermes send target, or write a local HTML file. Delivery is off until you turn it on.
 
-A report that goes out by Microsoft Graph mail can offer a small set of maintenance actions. The mailbox owner replies `approved` to the report, and the plugin creates one Kanban card for the work. Only two actions can ever be offered: updating an allowlisted set of plugins, and restarting one approved Hermes user service after the card completes. Hermes Agent releases, OS packages and Tailscale are reported only. The plugin never updates or restarts them on a mail approval.
+Microsoft Graph delivery and new mail approvals are unavailable in 0.1.1. The legacy token helper is no longer loaded. Hermes can attach OAuth credentials, but its public helper buffers the entire response before the plugin can enforce a byte limit. This release does not bypass the helper or remove the reply size limits.
 
 Scheduling and maintenance are also opt-in. Nothing runs on a timer until you create the jobs and enable them in the config.
 
 > [!WARNING]
-> **Preview.** This is version 0.1.0, an early preview. Expect breaking changes. Issues and pull requests are welcome.
+> **Preview.** This is version 0.1.1, an early preview. Expect breaking changes. Issues and pull requests are welcome.
 
 ## What the report looks like
 
@@ -23,11 +23,10 @@ A sample report, split in two and shown side by side. All data in it is invented
 
 - Linux with systemd. The collectors use `systemctl`, `journalctl` and APT, and they report a partial result when a tool is missing.
 - Hermes Agent 0.23.2 or later.
-- Optional: Microsoft Graph mail needs a delegated token helper in the profile that provides `get_token()` and reads its credentials from profile-local files. The plugin points the helper at the profile `.env` file and a profile-local token cache, and it never falls back to another profile. The mailbox needs delegated permission to identify the user, send mail and read messages, and the configured sender must belong to that mailbox.
-- Optional: SMTP needs a mail account, and the Kanban approval flow needs an existing board and a profile to do the maintenance work.
-- Optional: release lookups use `GITHUB_TOKEN` from the report process environment, or a GitHub CLI sign-in for the report user. Without either, the plugin uses the public GitHub API and reports the reason when a lookup fails. Do not put a token in the report config.
+- Optional: authenticated SMTP needs a mail account and `EMAIL_PASSWORD` in the active Hermes secret scope.
+- Optional: release lookups use `GITHUB_TOKEN` from the active Hermes secret scope. Without it, the plugin uses the public GitHub API. It does not use a GitHub CLI sign-in.
 
-The collectors also use tools such as `smartctl` or `udisksctl` for NVMe health, `docker` for container disk use, `gh` for release lookups and `systemd-run` for a delayed restart. Each missing tool degrades one part of the report. It does not stop the rest.
+Each missing collector tool degrades one part of the report. It does not stop the rest.
 
 ## How it works
 
@@ -47,14 +46,13 @@ The `--kind maintenance` variant collects the same sections and marks the report
 
 ## Delivery
 
-A dry run writes a private HTML preview and does nothing else. It does not send mail, create an approval offer or run maintenance.
+A dry run runs the collectors and writes a private HTML preview. It does not send mail, create an approval offer or run maintenance.
 
 A live run tries delivery in this order:
 
-1. **Microsoft Graph.** Delegated mail from the configured sender. The subject carries the report ID, and the plugin confirms the exact report in Sent Items.
-2. **SMTP.** Used only when the Microsoft Graph send fails in a way that proves the message was not accepted, or Microsoft Graph is unavailable.
-3. **Profile.** A `hermes send` target, given the report text on standard input.
-4. **Local.** A private HTML file in the profile report directory.
+1. **SMTP.** Sends mail to the configured recipients over TLS. Authenticated SMTP requires Hermes to supply `EMAIL_PASSWORD` to the caller. Hermes can strip credentials from no-agent cron scripts. If the password is unavailable, the report skips SMTP and uses the next configured channel.
+2. **Profile.** A `hermes send` target, given the report text on standard input.
+3. **Local.** A private HTML file in the profile report directory.
 
 Vault paths appear only in the email version. The local file and the default preview omit them, and `--preview-email` produces the email version as a private preview.
 
@@ -62,15 +60,11 @@ If a send result is uncertain, the plugin stops. It records the report ID in `de
 
 ## Approvals in brief
 
-Actions are offered only in a Microsoft Graph report, only when approvals are enabled, only to a configured owner who is among the recipients, and only when reply access, the Kanban board and the maintenance profile are all available. The offer becomes active only when the exact report ID is confirmed in Sent Items. Fallback reports offer no actions.
-
-Keep approvals off until your mail administrator verifies owner authentication for every delivery path. Matching Microsoft Graph sender addresses does not authenticate an owner. See [Actions and approval rules](docs/approvals.md) for the prerequisite and reply format.
-
-One accepted reply creates at most one Kanban card for the maintenance profile, with an idempotency key derived from the report ID. The card tells the worker which approved command to run and nothing else. Email text is never passed to the worker as instructions. When the card completes, a hook schedules the approved restart, if any, for two minutes after completion, and the poll job emails the result to the approving owner.
+Keep `approvals: false` in 0.1.1. SMTP, profile and local reports do not offer actions. Before upgrading, resolve existing offers and maintenance cards, and check for any restart timer already queued. See the [historical approval flow](docs/approvals.md).
 
 ## Settings
 
-Settings live in `hermes-health-report/config.yaml` inside the selected profile directory. No credentials belong in this file. SMTP passwords go in the profile `.env` file, and Microsoft Graph credentials stay with the token helper.
+Settings live in `hermes-health-report/config.yaml` inside the selected profile directory. No credentials belong in this file. Configure `EMAIL_PASSWORD` and `GITHUB_TOKEN` through Hermes on the report profile.
 
 | Setting | Meaning |
 |---|---|
@@ -79,9 +73,8 @@ Settings live in `hermes-health-report/config.yaml` inside the selected profile 
 | `recipients` | List of addresses that receive reports. |
 | `owners` | List of addresses allowed to approve actions by reply. |
 | `scheduler`, `maintenance`, `approvals` | Master switches for the scheduled jobs, the maintenance job and reply approvals. All default to off. |
-| `delivery.graph`, `delivery.smtp`, `delivery.profile` | Enable each delivery channel. All default to off. |
-| `graph_token_helper` | Trusted Python token helper. Use an absolute path or a path relative to the report profile. No default. |
-| `smtp.host`, `smtp.port`, `smtp.security`, `smtp.username` | SMTP server. `security` is `ssl` or `starttls`. The password is `EMAIL_PASSWORD` in the profile `.env` file. |
+| `delivery.smtp`, `delivery.profile` | Enable each delivery channel. Both default to off. Legacy settings cannot enable Graph. |
+| `smtp.host`, `smtp.port`, `smtp.security`, `smtp.username` | SMTP server. `security` is `ssl` or `starttls`. The password is `EMAIL_PASSWORD` from Hermes. |
 | `profile.target`, `profile.command` | `hermes send` destination and, if needed, the Hermes executable. |
 | `backup_unit`, `backup_target` | Backup user service to check, and a label for where backups go. No backup service is checked by default. |
 | `services` | Extra systemd units to check. |
@@ -103,7 +96,15 @@ Settings live in `hermes-health-report/config.yaml` inside the selected profile 
 - `hermes-health-report:report` at 08:30 on Saturday, no agent.
 - `hermes-health-report:poll` every 15 minutes, no agent. This job checks for approval replies.
 
-Jobs use the profile time zone. The report and poll jobs run only when `scheduler: true`. The maintenance and poll jobs also need `maintenance: true` and `approvals: true`. Setup refuses to overwrite a wrapper or reuse a job name that points somewhere else. Turning the switches off and running setup again pauses the jobs.
+Jobs use the profile time zone. All jobs require `scheduler: true`. Scheduled maintenance also requires `maintenance: true`. Keep `approvals: false` to leave the legacy poll job paused. Setup refuses to overwrite an unrelated wrapper or reuse a job name that points elsewhere. Turn the switches off and run setup again to pause the jobs.
+
+## What the plugin accesses
+
+- **Commands:** Collectors run `systemctl`, `journalctl`, `smartctl`, `udisksctl`, `gdbus`, `du`, `docker`, `git`, `apt-get -s`, `snap refresh --list` and version commands for Chromium, `cloudflared` and Tailscale. Python child processes check plugin updates and Chromium. Configured `probes[].argv` run as the report user, including during dry runs. Use trusted read-only commands. Optional delivery runs `hermes send`. Optional maintenance runs `hermes plugins update` for other allowlisted plugins, never for itself. An existing authorised restart can invoke `systemd-run --user` with `systemctl --user restart`.
+- **Network:** Collectors query the GitHub releases API and Chrome for Testing. They check Hindsight `/health` at the configured endpoint or the endpoint selected by Hindsight mode. Hermes plugin update checks may contact configured feeds and upstream repositories. Optional delivery sends report data to the configured SMTP server or Hermes destination. This release does not contact Microsoft Graph. There is no telemetry.
+- **Files outside plugin data:** Collectors inspect host mount and disk metadata, OS and APT metadata, the configured backup service journal, Hermes source and Git metadata, profile configuration and plugin manifests, browser caches, Hindsight configuration, and vault filenames and timestamps. They read `MEMORY.md` and `USER.md` only to count characters. Setup writes wrappers into the profile `scripts` directory and updates the cron store. Legacy approval processing reads Kanban board and task state.
+- **Background work and credentials:** Setup registers the jobs above. The completion hook can schedule a one-shot restart for an existing authorised card. The plugin does not start its own daemon or store credentials. It reads its declared secrets through Hermes, not from credential files.
+- **Remaining private interfaces (rule 9):** `cron.jobs` handles setup because the CLI does not provide a structured job listing with script ownership. `hermes_cli.kanban_db` remains because the public CLI cannot hold a live claim check across the plugin approval transaction. The plugin does not patch Hermes core.
 
 ## Install and verify
 

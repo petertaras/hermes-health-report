@@ -1,10 +1,12 @@
 # Design
 
+The Microsoft Graph paths below describe the legacy flow. Graph delivery and new approvals are unavailable in 0.1.1.
+
 This document records the decisions behind the current implementation. Setup and day-to-day use belong in the [setup guide](setup.md) and the [approval rules](approvals.md).
 
 ## Configuration in the profile
 
-All settings live in `hermes-health-report/config.yaml` inside the selected Hermes profile directory, along with the report state. Nothing about the instance, its mailboxes or its services is hardcoded in a report. Scheduler, delivery, maintenance and reply approval settings default to off, so installing the plugin changes nothing until an operator configures it. The config file holds no credentials. Microsoft Graph credentials stay with the delegated token helper, and the SMTP password stays in the profile `.env` file.
+All settings live in `hermes-health-report/config.yaml` inside the selected Hermes profile directory, along with the report state. Nothing about the instance, its mailboxes or its services is hardcoded in a report. Scheduler, delivery, maintenance and reply approval settings default to off, so installing the plugin changes nothing until an operator configures it. The config file holds no credentials. The plugin reads the SMTP password through Hermes.
 
 ## Partial reports
 

@@ -1,5 +1,13 @@
 name: hermes-health-report
-version: 0.1.0
-description: Profile-local health reports and reply approvals for Hermes.
+version: 0.1.1
+requires_hermes: ">=0.23.2"
+description: Profile-local health reports for Hermes.
+requires_env:
+  - name: EMAIL_PASSWORD
+    description: Only needed for authenticated SMTP delivery.
+    secret: true
+  - name: GITHUB_TOKEN
+    description: Optional token for GitHub release metadata lookups.
+    secret: true
 provides_hooks:
   - kanban_task_completed

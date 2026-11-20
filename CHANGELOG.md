@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1 preview
+
+- Declare Hermes Agent 0.23.2 as the minimum version and disclose what the plugin accesses.
+- Read SMTP and GitHub credentials through Hermes. Stop reading profile `.env` files or using GitHub CLI sign-in.
+- Disable Microsoft Graph delivery and new approvals until Hermes supports bounded credentialed requests.
+- Configure vaults explicitly and set Hindsight endpoints in the report or Hindsight configuration.
+
 ## 0.1.0 preview
 
 - Add profile-local health and maintenance reports with HTML previews.

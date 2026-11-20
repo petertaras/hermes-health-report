@@ -1,3 +1,5 @@
+import io
+import json
 import subprocess
 import unittest
 from pathlib import Path
@@ -9,6 +11,21 @@ import delivery
 
 CFG = {'sender': 'bot@example.com', 'recipients': ['owner@example.com'], 'delivery': {'graph': True, 'smtp': True, 'profile': True}, 'profile': {'target': 'test:owner'}}
 SENT = {'id': 's1', 'conversationId': 'c1', 'sentDateTime': '2026-01-01T00:00:00Z', 'subject': 'Report [health-report:abc]', 'from': {'emailAddress': {'address': 'bot@example.com'}}}
+OFFER = {'mailbox': 'bot@example.com', 'id': 's1', 'conversationId': 'c1'}
+ANCHOR = '<original@example.com>'
+
+
+class GraphResponse(io.BytesIO):
+    status = 200
+    length: int | None = None
+
+    def __init__(self, data):
+        super().__init__(json.dumps(data).encode())
+        self.read_sizes = []
+
+    def read(self, size: int | None = -1) -> bytes:
+        self.read_sizes.append(size)
+        return super().read(size)
 
 
 class GraphTests(unittest.TestCase):
@@ -97,6 +114,49 @@ class GraphTests(unittest.TestCase):
         }])
         self.assertEqual(self.graph.replies(offer)[0]['text'], body)
         self.assertIn(',body,', self.graph._messages.call_args.args[0].replace('%2C', ','))
+
+    @patch('delivery.request.OpenerDirector.open')
+    def test_oversized_response_is_closed_without_parsing(self, open_graph):
+        response = GraphResponse({'value': ['data' * 32]})
+        open_graph.return_value = response
+        with patch('delivery.GRAPH_RESPONSE_BYTES', 64), patch('delivery.json.loads') as loads:
+            with self.assertRaisesRegex(RuntimeError, 'response byte limit'):
+                self.graph._request('GET', '/me/messages', 'test-token')
+        self.assertEqual(response.read_sizes, [65])
+        loads.assert_not_called()
+        self.assertTrue(response.closed)
+
+    @patch('delivery.request.OpenerDirector.open')
+    def test_incomplete_response_is_not_parsed(self, open_graph):
+        response = GraphResponse({'value': []})
+        response.length = 1  # An HTTP response stopped before its declared length.
+        open_graph.return_value = response
+        with patch('delivery.json.loads') as loads:
+            with self.assertRaisesRegex(RuntimeError, 'incomplete Graph response'):
+                self.graph._request('GET', '/me/messages', 'test-token')
+        loads.assert_not_called()
+
+    @patch('delivery.request.OpenerDirector.open')
+    def test_reply_budget_discards_partial_collection(self, open_graph):
+        address = {'emailAddress': {'address': 'owner@example.com'}}
+        reply = {
+            'id': 'r1', 'conversationId': 'c1', 'receivedDateTime': 'today',
+            'from': address, 'sender': address,
+            'body': {'contentType': 'text', 'content': 'approved'},
+            'internetMessageHeaders': [{'name': 'In-Reply-To', 'value': ANCHOR}],
+        }
+        page = {'value': [reply], '@odata.nextLink': delivery.BASE + '/next'}
+        page_size = len(json.dumps(page).encode())
+        budget = page_size + len(json.dumps({'value': []}).encode())
+        for allowance, expected in [(budget, ['approved']), (budget - 1, [])]:
+            with self.subTest(allowance=allowance):
+                open_graph.reset_mock()
+                second = GraphResponse({'value': []})
+                open_graph.side_effect = [GraphResponse({**SENT, 'internetMessageId': ANCHOR}), GraphResponse(page), second]
+                with patch('delivery.GRAPH_LIST_BYTES', allowance):
+                    self.assertEqual([r['text'] for r in self.graph.replies(OFFER)], expected)
+                self.assertEqual(open_graph.call_count, 3)
+                self.assertEqual(second.read_sizes, [allowance - page_size + 1])
 
     def test_preflight_failure_is_definite(self):
         self.graph._identity.return_value = False

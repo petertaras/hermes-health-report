@@ -98,7 +98,7 @@ class MemoryProbeTests(unittest.TestCase):
             (home / 'hindsight' / 'config.json').write_text('{"api_url":"http://localhost:bad"}')
             self.assertEqual(probes._memory_health(home, {}), ('warn', 'health unavailable'))
 
-    def test_vault_fallback_from_profile_env_and_missing(self):
+    def test_vault_uses_explicit_config_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             vault = Path(tmp) / 'private'
             vault.mkdir()
@@ -111,7 +111,7 @@ class MemoryProbeTests(unittest.TestCase):
             try:
                 with patch.dict(os.environ, {'TZ': 'AEST-10'}):
                     time.tzset()
-                    rows = probes._memory([('work', home)], {})
+                    rows = probes._memory([('work', home)], {'vaults': [{'path': str(vault)}]})
             finally:
                 time.tzset()
             row = next(r for r in rows if r.get('vault'))
@@ -120,6 +120,5 @@ class MemoryProbeTests(unittest.TestCase):
             self.assertEqual(row['vault_path'], str(vault))
             self.assertEqual(row['documents'], 1)
             self.assertNotIn(str(vault), str({k:v for k,v in row.items() if k != 'vault_path'}))
-            (home / '.env').unlink()
             rows = probes._memory([('work', home)], {})
             self.assertTrue(any(r.get('vault') and 'not configured' in r['notes'] for r in rows))

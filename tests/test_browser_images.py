@@ -1,11 +1,44 @@
+import sys
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import probes
 
 
 class BrowserImagesTest(unittest.TestCase):
+    def test_chromium_uses_only_the_runtime_selector(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'hermes-agent'
+            python = source / 'venv' / 'bin' / 'python'
+            python.parent.mkdir(parents=True)
+            python.symlink_to(sys.executable)
+            runtime = source / 'hermes_cli'
+            runtime.mkdir()
+            (runtime / '__init__.py').touch()
+            for selected in ('/runtime-chromium', None):
+                with self.subTest(selected=selected):
+                    (runtime / 'browser_runtime.py').write_text(
+                        f'def chromium_executable():\n    return {selected!r}\n', encoding='utf-8',
+                    )
+                    with patch.object(probes, '_profiles', return_value=[]), \
+                         patch.object(probes, '_yaml', return_value={'browser': {'executable_path': '/raw-config'}}), \
+                         patch.object(probes, '_run', return_value=(0, 'Chromium 123.0.0.0')) as run, \
+                         patch.object(probes, '_chromium_stable', return_value='123.0.0.0'), \
+                         patch.object(probes, '_latest', return_value=('', 'offline')), \
+                         patch.object(Path, 'home', return_value=root):
+                        row = next(r for r in probes._release(root, root) if r['item'] == 'Chromium')
+                    commands = [call.args[0] for call in run.call_args_list]
+                    self.assertNotIn(['/raw-config', '--version'], commands)
+                    if selected:
+                        self.assertIn([selected, '--version'], commands)
+                        self.assertIn('Hermes runtime selection', row['notes'])
+                    else:
+                        self.assertEqual(row['version'], '')
+                        self.assertIn('none selected by Hermes', row['notes'])
+
     def test_terminal_images_are_deduplicated_and_compared(self):
         root = Path('/nonexistent-test-root')
         image = 'ghcr.io/example/playwright:v1.40.0-cft120'

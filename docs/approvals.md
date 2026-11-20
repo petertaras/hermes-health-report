@@ -1,5 +1,7 @@
 # Actions and approval rules
 
+Microsoft Graph delivery and reply approvals are opt-in. Resolve outstanding cards and offers before upgrading.
+
 **Keep `approvals: false` (the default) until your mail administrator verifies the approval mailbox's sender authentication.** Microsoft Graph `from` and `sender` agreement, the `owners` list, and reply headers do not prove the owner sent the message. The plugin does not authenticate the owner itself.
 
 Before enabling approvals, verify that the mail system only delivers mail asserting a configured owner address from that authenticated owner. Check external ingress, relays, connectors and delegated send permissions. Domain authentication alone does not prove an individual mailbox identity. If you cannot verify this guarantee for every delivery path, leave approvals off. This does not prevent report delivery.
@@ -14,7 +16,7 @@ The reply must be a direct reply in the same conversation. The plugin checks the
 
 A question, a negation, an invalid number, a self-sent message, a message in another conversation, a second reply to a consumed offer, or a reply after 72 hours cannot create a card. No approval is active until the exact report appears in Sent Items. Only the latest confirmed offer for a conversation can be active, and a newer confirmed report for that conversation replaces the older one. Fallback reports never offer actions.
 
-Each Microsoft Graph response has a 1 MiB limit. The conversation pages have a combined 4 MiB limit per reply check. If a limit is exceeded, the plugin discards all replies from that check. It never approves from a partial body or a partial conversation listing.
+Each Microsoft Graph response has a 1 MiB limit. The conversation pages have a combined 4 MiB limit per reply check. Hermes' public credentialed request helper reads the entire response into memory before the plugin checks these limits; they do not bound peak memory or network transfer. If a limit is exceeded, the plugin discards all replies from that check. It never approves from a partial body or a partial conversation listing.
 
 ## Allowlist
 

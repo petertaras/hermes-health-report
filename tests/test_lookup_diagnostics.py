@@ -1,9 +1,11 @@
+import io
+import sys
 import tempfile
 import unittest
 from email.message import Message
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 
 import probes
@@ -11,15 +13,19 @@ from rendering import render
 
 
 class LookupDiagnosticsTests(unittest.TestCase):
-    def test_hermes_release_uses_gh_and_names_source(self):
-        def run(argv, **kwargs):
-            if argv[0] == 'gh':
-                return 0, 'v1.2.3'
-            return 1, ''
-
-        with patch.dict(probes.os.environ, {}, clear=True), patch.object(probes, '_run', side_effect=run), patch.object(probes, '_chromium_stable', return_value=''):
+    def test_hermes_release_uses_scoped_github_token(self):
+        scope = SimpleNamespace(get_secret=Mock(return_value='scoped-fixture'), UnscopedSecretError=RuntimeError)
+        with patch.dict(sys.modules, {'agent.secret_scope': scope}), \
+                patch.dict(probes.os.environ, {'GITHUB_TOKEN': 'unscoped-fixture'}), \
+                patch.object(probes, '_run', return_value=(1, '')) as run, \
+                patch.object(probes, '_chromium_stable', return_value=''), \
+                patch.object(probes.urllib.request.OpenerDirector, 'open', return_value=io.BytesIO(b'{"tag_name":"v1.2.3"}')) as open_url:
             row = probes._release(Path('/missing'), Path('/missing'))[0]
-        self.assertIn('upstream: v1.2.3 (via GitHub CLI)', row['notes'])
+        self.assertIn('upstream: v1.2.3 (via authenticated GitHub API)', row['notes'])
+        self.assertEqual(open_url.call_args.args[0].get_header('Authorization'), 'Bearer scoped-fixture')
+        self.assertTrue(scope.get_secret.call_args_list)
+        self.assertTrue(all(call.args == ('GITHUB_TOKEN',) for call in scope.get_secret.call_args_list))
+        self.assertFalse(any(call.args[0][0] == 'gh' for call in run.call_args_list))
 
     def test_tailscale_release_reports_anonymous_rate_limit(self):
         headers = Message()

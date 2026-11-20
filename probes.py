@@ -44,12 +44,16 @@ def _latest(repo, with_date=False):
 
     def release(tag, detail, published=''):
         return (tag, detail, published[:10] if isinstance(published, str) else '') if with_date else (tag, detail)
-    token = os.environ.get('GITHUB_TOKEN', '').strip()
-    if not token:
-        rc, tag = _run(['gh', 'api', '--hostname', 'github.com', endpoint, '--jq', '[.tag_name, .published_at] | @tsv' if with_date else '.tag_name'], timeout=5)
-        tag, _, date = tag.partition('\t')
-        if not rc and re.fullmatch(r'v?[0-9][0-9A-Za-z.+_-]*', tag):
-            return release(tag, 'via GitHub CLI', date)
+    token = ''
+    try:
+        from agent.secret_scope import UnscopedSecretError, get_secret
+    except ImportError:  # Standalone reporting can still use the public API.
+        pass
+    else:
+        try:
+            token = (get_secret('GITHUB_TOKEN') or '').strip()
+        except UnscopedSecretError:
+            pass
 
     headers = {'User-Agent': 'hermes-health-report', 'Accept': 'application/vnd.github+json'}
     if token:
@@ -246,6 +250,8 @@ def _disk(config):
 
 
 def _plugin_checks(source, home, directory):
+    # `hermes plugins check-updates --json` writes a result cache in the target
+    # profile in v0.23.2. Use its check logic without the cache writer.
     # Report directory installs only. Emit each result before the next network
     # call so a slow source cannot discard the entire profile's results.
     script = '''
@@ -421,16 +427,16 @@ def _release(root, home):
     # not be reimplemented or guessed from the pin file.
     python = src / 'venv' / 'bin' / 'python'
     if python.exists() and src.exists():
-        script = ('import json; from hermes_cli import browser_runtime as b; '
-                  'p=b.chromium_executable(); '
-                  's=("configured" if b._configured_executable() else "managed" if b._pm_executable() else "baked image" if b._baked_executable() else "system fallback"); '
-                  'print(json.dumps([p,s]))')
+        script = ('import json; from hermes_cli.browser_runtime import chromium_executable; '
+                  'print(json.dumps(chromium_executable()))')
         # env is passed in an isolated interpreter without changing the process environment.
         try:
             p = subprocess.run([str(python), '-c', script], cwd=src, env={**os.environ, 'HERMES_HOME': str(home), 'PYTHONDONTWRITEBYTECODE': '1'}, capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
             if p.returncode == 0:
-                selected, source = json.loads(p.stdout.strip().splitlines()[-1])
-                path = selected or ''
+                selected = json.loads(p.stdout.strip().splitlines()[-1])
+                if selected is None or isinstance(selected, str):
+                    path = selected or ''
+                    source = 'Hermes runtime selection' if path else 'none selected by Hermes'
         except (OSError, subprocess.SubprocessError, ValueError, IndexError, TypeError):
             pass
     if not path and not source:
@@ -520,19 +526,6 @@ def _os_updates():
         snap_status=_command_note(src) if src else 'None waiting'))]
 
 
-def _memory_env(home, key):
-    """Read a single non-secret setting without exporting or reporting .env contents."""
-    try:
-        with (home / '.env').open(encoding='utf-8') as f:
-            for line in f:
-                match = re.match(r'^\s*(?:export\s+)?' + re.escape(key) + r'\s*=\s*(.*?)\s*$', line)
-                if match:
-                    return match.group(1).strip().strip('"\'')
-    except (OSError, UnicodeError):
-        pass
-    return ''
-
-
 def _memory_health(home, cache):
     cfg = {}
     for path in (home / 'hindsight' / 'config.json', Path.home() / '.hindsight' / 'config.json'):
@@ -547,7 +540,7 @@ def _memory_health(home, cache):
         cfg = {}
     local = cfg.get('mode') in ('local_embedded', 'local_external')
     default = 'http://localhost:8888' if local else 'https://api.hindsight.vectorize.io'
-    return _hindsight_api_health(cfg.get('api_url') or _memory_env(home, 'HINDSIGHT_API_URL') or default, cache)
+    return _hindsight_api_health(cfg.get('api_url') or default, cache)
 
 
 def _http_origin(url):
@@ -639,13 +632,6 @@ def _memory(profiles, config):
         rows.append(_row(status, 'Hindsight memory', notes=notes, hindsight_web=console))
     vaults = config.get('vaults', [])
     vaults = [v for v in vaults if isinstance(v, dict) and isinstance(v.get('path'), str) and v['path'].strip()] if isinstance(vaults, list) else []
-    if not vaults:
-        seen = set()
-        for name, home in profiles:
-            value = _memory_env(home, 'OBSIDIAN_VAULT_PATH')
-            if value and value not in seen:
-                seen.add(value)
-                vaults.append({'path': value})
     if not vaults:
         rows.append(_row('info', 'Vault', notes='not configured', vault=True))
     report_zone = dt.datetime.now().astimezone().tzinfo

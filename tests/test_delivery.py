@@ -1,9 +1,10 @@
-import io
 import json
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import delivery
@@ -15,23 +16,21 @@ OFFER = {'mailbox': 'bot@example.com', 'id': 's1', 'conversationId': 'c1'}
 ANCHOR = '<original@example.com>'
 
 
-class GraphResponse(io.BytesIO):
-    status = 200
-    length: int | None = None
+def response(data=None, *, status=200, headers=None, raw=None):
+    body = json.dumps(data).encode() if raw is None else raw
+    return SimpleNamespace(status=status, body=body, headers=headers or {})
 
-    def __init__(self, data):
-        super().__init__(json.dumps(data).encode())
-        self.read_sizes = []
 
-    def read(self, size: int | None = -1) -> bytes:
-        self.read_sizes.append(size)
-        return super().read(size)
+def provider_patch(provider):
+    return patch.dict(sys.modules, {
+        'hermes_cli': SimpleNamespace(),
+        'hermes_cli.plugin_provider_requests': SimpleNamespace(credentialed_provider_request=provider),
+    })
 
 
 class GraphTests(unittest.TestCase):
     def setUp(self):
         self.graph = delivery.Graph('/nonexistent/profile', CFG)
-        self.graph._token = Mock(return_value='test-token')
         self.graph._identity = Mock(return_value=True)
 
     def test_default_disabled(self):
@@ -40,20 +39,44 @@ class GraphTests(unittest.TestCase):
         self.assertFalse(g.reply_available())
         self.assertEqual(g.send('a', 'b', 'id'), ('definite', None))
 
-    def test_enabled_graph_without_helper_is_unavailable(self):
+    def test_provider_failure_is_unavailable(self):
+        provider = Mock(side_effect=RuntimeError('no credentials'))
         graph = delivery.Graph('/no', CFG)
-        self.assertFalse(graph.available())
-        self.assertEqual(graph.send('a', 'b', 'id'), ('definite', None))
+        with provider_patch(provider):
+            self.assertFalse(graph.available())
+            self.assertEqual(graph.send('a', 'b', 'id'), ('definite', None))
 
-    def test_configured_helper_uses_selected_profile_credentials(self):
-        with TemporaryDirectory() as directory:
+    def test_legacy_helper_is_not_executed(self):
+        provider = Mock(side_effect=RuntimeError('no credentials'))
+        with TemporaryDirectory() as directory, provider_patch(provider):
             home = Path(directory)
             helper = home / 'example_token.py'
-            helper.write_text('ENV = CACHE = None\ndef get_token():\n    return ENV, CACHE\n', encoding='utf-8')
+            marker = home / 'ran'
+            helper.write_text(f'from pathlib import Path\nPath({str(marker)!r}).touch()\n', encoding='utf-8')
             for path in [helper.name, str(helper)]:
                 with self.subTest(path=path):
                     graph = delivery.Graph(home, {**CFG, 'graph_token_helper': path})
-                    self.assertEqual(graph._token(), (home / '.env', home / 'secrets/msgraph-delegated.json'))
+                    self.assertFalse(graph.available())
+                    self.assertFalse(graph.reply_available())
+                    self.assertEqual(graph.send('Report', 'body', 'abc'), ('definite', None))
+                    self.assertEqual(graph.replies(OFFER), [])
+            self.assertFalse(marker.exists())
+
+    def test_credentialed_route_and_identity(self):
+        provider = Mock(return_value=response({'mail': 'BOT@example.com'}))
+        graph = delivery.Graph('/no', CFG)
+        with provider_patch(provider):
+            self.assertTrue(graph.available())
+        provider.assert_called_once_with('graph', 'GET', delivery.BASE + '/me?$select=mail,userPrincipalName',
+            json=None, headers={'Accept-Encoding': 'identity', 'Prefer': 'outlook.body-content-type="text", IdType="ImmutableId"'}, timeout=30)
+
+    def test_credentialed_route_sends_json_body(self):
+        provider = Mock(return_value=response(raw=b'', status=202))
+        body = {'message': {'subject': 'hello'}}
+        with provider_patch(provider):
+            self.assertEqual(self.graph._request('POST', '/me/sendMail', body), (202, {}))
+        self.assertEqual(provider.call_args.args, ('graph', 'POST', delivery.BASE + '/me/sendMail'))
+        self.assertEqual(provider.call_args.kwargs['json'], body)
 
     def test_send_confirmation_exact_unique(self):
         self.graph._request = Mock(return_value=(202, {}))
@@ -61,7 +84,7 @@ class GraphTests(unittest.TestCase):
         state, sent = self.graph.send('Report', '<b>hello</b>', 'abc')
         self.assertEqual(state, 'sent')
         self.assertEqual(sent, {'mailbox': 'bot@example.com', 'id': 's1', 'conversationId': 'c1', 'sentDateTime': SENT['sentDateTime']})
-        self.assertEqual(self.graph._request.call_args.args[3]['message']['subject'], SENT['subject'])
+        self.assertEqual(self.graph._request.call_args.args[2]['message']['subject'], SENT['subject'])
         self.assertIn('subject+eq', self.graph._messages.call_args.args[0])
 
     def test_send_rejection_and_unknown(self):
@@ -115,29 +138,46 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(self.graph.replies(offer)[0]['text'], body)
         self.assertIn(',body,', self.graph._messages.call_args.args[0].replace('%2C', ','))
 
-    @patch('delivery.request.OpenerDirector.open')
-    def test_oversized_response_is_closed_without_parsing(self, open_graph):
-        response = GraphResponse({'value': ['data' * 32]})
-        open_graph.return_value = response
-        with patch('delivery.GRAPH_RESPONSE_BYTES', 64), patch('delivery.json.loads') as loads:
-            with self.assertRaisesRegex(RuntimeError, 'response byte limit'):
-                self.graph._request('GET', '/me/messages', 'test-token')
-        self.assertEqual(response.read_sizes, [65])
-        loads.assert_not_called()
-        self.assertTrue(response.closed)
-
-    @patch('delivery.request.OpenerDirector.open')
-    def test_incomplete_response_is_not_parsed(self, open_graph):
-        response = GraphResponse({'value': []})
-        response.length = 1  # An HTTP response stopped before its declared length.
-        open_graph.return_value = response
-        with patch('delivery.json.loads') as loads:
-            with self.assertRaisesRegex(RuntimeError, 'incomplete Graph response'):
-                self.graph._request('GET', '/me/messages', 'test-token')
+    def test_oversized_response_is_not_parsed(self):
+        provider = Mock(return_value=response({'value': ['data' * 32]}))
+        with provider_patch(provider), patch('delivery.GRAPH_RESPONSE_BYTES', 64), patch('delivery.json.loads') as loads:
+            with self.assertRaises(RuntimeError):
+                self.graph._request('GET', '/me/messages')
         loads.assert_not_called()
 
-    @patch('delivery.request.OpenerDirector.open')
-    def test_reply_budget_discards_partial_collection(self, open_graph):
+    def test_incomplete_or_encoded_response_is_not_parsed(self):
+        raw = b'{"value": []}'
+        cases = [
+            (200, {'content-length': str(len(raw) + 1)}),
+            (200, {'Content-Length': str(len(raw) - 1)}),
+            (200, {'content-length': 'invalid'}),
+            (206, {}),
+            (200, {'cOnTeNt-RaNgE': 'bytes 0-3/10'}),
+            (200, {'Content-Encoding': 'gzip'}),
+        ]
+        for status, headers in cases:
+            with self.subTest(status=status, headers=headers):
+                provider = Mock(return_value=response(raw=raw, status=status, headers=headers))
+                with provider_patch(provider), patch('delivery.json.loads') as loads:
+                    with self.assertRaises(RuntimeError):
+                        self.graph._request('GET', '/me/messages')
+                loads.assert_not_called()
+
+    def test_complete_identity_response_is_parsed(self):
+        raw = b'{"value": []}'
+        provider = Mock(return_value=response(raw=raw, headers={'content-length': str(len(raw)), 'Content-Encoding': 'identity'}))
+        with provider_patch(provider):
+            self.assertEqual(self.graph._request('GET', '/me/messages'), (200, {'value': []}))
+
+    def test_malformed_json_and_provider_error_propagate(self):
+        provider = Mock(return_value=response(raw=b'{"value":'))
+        with provider_patch(provider), self.assertRaises(json.JSONDecodeError):
+            self.graph._request('GET', '/me/messages')
+        provider.side_effect = RuntimeError('transport failed')
+        with provider_patch(provider), self.assertRaisesRegex(RuntimeError, 'transport failed'):
+            self.graph._request('GET', '/me/messages')
+
+    def test_reply_budget_discards_partial_collection(self):
         address = {'emailAddress': {'address': 'owner@example.com'}}
         reply = {
             'id': 'r1', 'conversationId': 'c1', 'receivedDateTime': 'today',
@@ -146,17 +186,25 @@ class GraphTests(unittest.TestCase):
             'internetMessageHeaders': [{'name': 'In-Reply-To', 'value': ANCHOR}],
         }
         page = {'value': [reply], '@odata.nextLink': delivery.BASE + '/next'}
-        page_size = len(json.dumps(page).encode())
-        budget = page_size + len(json.dumps({'value': []}).encode())
+        budget = len(json.dumps(page).encode()) + len(json.dumps({'value': []}).encode())
         for allowance, expected in [(budget, ['approved']), (budget - 1, [])]:
             with self.subTest(allowance=allowance):
-                open_graph.reset_mock()
-                second = GraphResponse({'value': []})
-                open_graph.side_effect = [GraphResponse({**SENT, 'internetMessageId': ANCHOR}), GraphResponse(page), second]
-                with patch('delivery.GRAPH_LIST_BYTES', allowance):
+                provider = Mock(side_effect=[response({**SENT, 'internetMessageId': ANCHOR}), response(page), response({'value': []})])
+                with provider_patch(provider), patch('delivery.GRAPH_LIST_BYTES', allowance):
                     self.assertEqual([r['text'] for r in self.graph.replies(OFFER)], expected)
-                self.assertEqual(open_graph.call_count, 3)
-                self.assertEqual(second.read_sizes, [allowance - page_size + 1])
+                self.assertEqual(provider.call_count, 3)
+
+    def test_reply_incomplete_json_discards_partial_collection(self):
+        address = {'emailAddress': {'address': 'owner@example.com'}}
+        reply = {'id': 'r1', 'conversationId': 'c1', 'receivedDateTime': 'today',
+                 'from': address, 'sender': address,
+                 'body': {'contentType': 'text', 'content': 'approved'},
+                 'internetMessageHeaders': [{'name': 'In-Reply-To', 'value': ANCHOR}]}
+        first = {'value': [reply], '@odata.nextLink': delivery.BASE + '/next'}
+        provider = Mock(side_effect=[response({**SENT, 'internetMessageId': ANCHOR}), response(first), response(raw=b'{"value":')])
+        with provider_patch(provider):
+            self.assertEqual(self.graph.replies(OFFER), [])
+        self.assertEqual(provider.call_count, 3)
 
     def test_preflight_failure_is_definite(self):
         self.graph._identity.return_value = False
@@ -165,6 +213,21 @@ class GraphTests(unittest.TestCase):
 
 
 class FallbackTests(unittest.TestCase):
+    @patch('delivery.smtplib.SMTP')
+    def test_smtp_uses_only_the_scoped_password(self, smtp):
+        smtp.return_value.send_message.return_value = {}
+        cfg = {**CFG, 'smtp': {'host': 'smtp.example.com', 'username': 'bot'}, 'delivery': {'smtp': True}}
+        get_secret = Mock(return_value='scoped-fixture')
+        with patch.dict(sys.modules, {'agent.secret_scope': SimpleNamespace(get_secret=get_secret)}), \
+                patch.dict(delivery.os.environ, {'EMAIL_PASSWORD': 'unscoped-fixture'}):
+            self.assertEqual(delivery.fallback('/x', cfg, 's', '<p>a</p>', 'b'), 'smtp')
+            smtp.return_value.login.assert_called_once_with('bot', 'scoped-fixture')
+            get_secret.assert_called_once_with('EMAIL_PASSWORD')
+            smtp.reset_mock()
+            get_secret.return_value = None
+            self.assertIsNone(delivery.fallback('/x', cfg, 's', '<p>a</p>', 'b'))
+            smtp.assert_not_called()
+
     def test_default_off(self):
         self.assertIsNone(delivery.fallback('/x', {}, 's', 'private', 'redacted'))
 

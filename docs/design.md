@@ -1,6 +1,6 @@
 # Design
 
-The Microsoft Graph paths below describe the legacy flow. Graph delivery and new approvals are unavailable in 0.1.1.
+Graph delivery and reply approvals are independently opt-in and default to off.
 
 This document records the decisions behind the current implementation. Setup and day-to-day use belong in the [setup guide](setup.md) and the [approval rules](approvals.md).
 
@@ -35,6 +35,8 @@ The report shows the effective Chromium version and where it came from, and comp
 ## Delivery order and uncertain sends
 
 Delivery tries delegated Microsoft Graph mail first, then SMTP, then a Hermes send target, then a local file. A channel is skipped only on a definite failure or when it is unavailable. When a send result cannot be classified, the run stops and leaves `delivery-pending.json` in place. Sending a second copy through a fallback would be worse than sending none until an operator checks, and an approval offer can only be activated by the copy in Sent Items, so a duplicate report would also create a confusing second offer.
+
+Hermes owns the public-client PKCE grant and makes credentialed Graph requests. Its helper buffers the entire response before the plugin applies the 1 MiB response and 4 MiB total conversation-page limits. Limits fail closed for approval checks but are not peak-memory or network-transfer bounds.
 
 ## Mail approvals
 

@@ -1,8 +1,8 @@
 """Delivery transports. All channels require explicit opt-in in delivery.
 
 Settings: sender is a mailbox address; recipients is a list of addresses;
-delivery.smtp/profile are booleans, default false. Graph delivery and reply
-polling are unavailable until Hermes offers bounded credentialed requests.
+delivery.graph/smtp/profile are booleans, default false. Graph delivery and
+reply polling use the active profile's Hermes OAuth sign-in.
 
 SMTP settings live in smtp (host, port, security='starttls' or 'ssl', username)
 and its password is EMAIL_PASSWORD from the active Hermes secret scope.
@@ -23,18 +23,11 @@ import ssl
 import subprocess
 import time
 from email.message import EmailMessage
-from urllib import error, parse, request
+from urllib import parse
 
 BASE = 'https://graph.microsoft.com/v1.0'
-GRAPH_UNAVAILABLE_REASON = 'No bounded Hermes credentialed request route for Microsoft Graph'
 GRAPH_RESPONSE_BYTES = 1024 * 1024
 GRAPH_LIST_BYTES = 4 * 1024 * 1024
-
-
-class _NoGraphRedirects(request.HTTPRedirectHandler):
-    # urllib normally drains redirect bodies without a size limit.
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
 
 
 def _enabled(config, key):
@@ -50,44 +43,44 @@ class Graph:
         self.config = config
         self.sender = config.get('sender', '')
 
-    def _token(self):
-        # Do not fall back to the legacy helper or weaken the reply byte limits.
-        raise RuntimeError(GRAPH_UNAVAILABLE_REASON)
+    def _request(self, method, path, body=None):
+        status, raw = self._request_bytes(method, path, body)
+        return status, json.loads(raw) if raw and status == 200 else {}
 
-    def _request(self, method, path, token, body=None):
-        status, raw = self._request_bytes(method, path, token, body)
-        return status, json.loads(raw) if raw else {}
+    def _request_bytes(self, method, path, body=None, *, remaining=None):
+        from hermes_cli.plugin_provider_requests import credentialed_provider_request
 
-    def _request_bytes(self, method, path, token, body=None, *, remaining=None):
         if not path.startswith('/') or path.startswith('//'):
             raise ValueError('invalid Graph path')
         limit = GRAPH_RESPONSE_BYTES if remaining is None else min(GRAPH_RESPONSE_BYTES, remaining)
-        req = request.Request(BASE + path, method=method,
-            data=json.dumps(body).encode() if body is not None else None,
-            headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json',
-                     'Prefer': 'outlook.body-content-type="text", IdType="ImmutableId"'})
-        try:
-            with request.build_opener(_NoGraphRedirects()).open(req, timeout=30) as resp:
-                raw = resp.read(limit + 1)
-                if len(raw) > limit:
-                    raise RuntimeError('Graph response byte limit exceeded')
-                # A sized read can return early on EOF with Content-Length still due.
-                if resp.length not in (None, 0):
-                    raise RuntimeError('incomplete Graph response')
-                return resp.status, raw
-        except error.HTTPError as exc:
-            with exc:
-                return exc.code, b''
+        resp = credentialed_provider_request(
+            'graph', method, BASE + path, json=body, timeout=30,
+            headers={'Accept-Encoding': 'identity',
+                     'Prefer': 'outlook.body-content-type="text", IdType="ImmutableId"'},
+        )
+        # Hermes has already read the full body. Never parse a partial result.
+        raw = resp.body
+        if len(raw) > limit:
+            raise RuntimeError('Graph response byte limit exceeded')
+        headers = {name.lower(): value.strip() for name, value in resp.headers.items()}
+        if resp.status == 206 or 'content-range' in headers:
+            raise RuntimeError('incomplete Graph response')
+        if headers.get('content-encoding', 'identity').lower() != 'identity':
+            raise RuntimeError('unsupported Graph response encoding')
+        length = headers.get('content-length')
+        if length is not None and (not re.fullmatch(r'[0-9]+', length) or int(length) != len(raw)):
+            raise RuntimeError('incomplete Graph response')
+        return resp.status, raw
 
-    def _identity(self, token):
-        status, obj = self._request('GET', '/me?$select=mail,userPrincipalName', token)
+    def _identity(self):
+        status, obj = self._request('GET', '/me?$select=mail,userPrincipalName')
         return status == 200 and self.sender.lower() in {str(obj.get('mail') or '').lower(), str(obj.get('userPrincipalName') or '').lower()}
 
     def available(self):
         if not (_enabled(self.config, 'graph') and isinstance(self.sender, str) and self.sender and _addresses(self.config.get('recipients'))):
             return False
         try:
-            return bool(self._identity(self._token()))
+            return bool(self._identity())
         except Exception:
             return False
 
@@ -95,18 +88,18 @@ class Graph:
         if not self.available():
             return False
         try:
-            status, _ = self._request('GET', '/me/mailFolders/inbox/messages?$top=1&$select=id', self._token())
-            return status == 200
+            status, data = self._request('GET', '/me/mailFolders/inbox/messages?$top=1&$select=id')
+            return status == 200 and isinstance(data, dict) and isinstance(data.get('value'), list)
         except Exception:
             return False
 
-    def _messages(self, path, token):
+    def _messages(self, path):
         result = []
         remaining = GRAPH_LIST_BYTES
         for _ in range(20):
             if remaining == 0:
                 raise RuntimeError('Graph list byte limit reached')
-            status, raw = self._request_bytes('GET', path, token, remaining=remaining)
+            status, raw = self._request_bytes('GET', path, remaining=remaining)
             if status != 200:
                 raise RuntimeError('Graph list failed')
             remaining -= len(raw)
@@ -114,9 +107,9 @@ class Graph:
             if not isinstance(data, dict) or not isinstance(data.get('value'), list):
                 raise RuntimeError('Graph list failed')
             result.extend(data['value'])
-            next_link = data.get('@odata.nextLink')
-            if not next_link:
+            if '@odata.nextLink' not in data:
                 return result
+            next_link = data['@odata.nextLink']
             if not isinstance(next_link, str) or not next_link.startswith(BASE + '/'):
                 raise RuntimeError('invalid Graph pagination')
             path = next_link[len(BASE):]
@@ -129,15 +122,14 @@ class Graph:
         # A unique subject equality avoids substring, prefix and ordering matches.
         tagged = f'{subject} [health-report:{report_id}]'
         try:
-            token = self._token()
-            if not self._identity(token):
+            if not self._identity():
                 return 'definite', None
         except Exception:
             return 'definite', None
         msg = {'message': {'subject': tagged, 'body': {'contentType': 'HTML', 'content': html},
                            'toRecipients': [{'emailAddress': {'address': x}} for x in to]}, 'saveToSentItems': True}
         try:
-            status, _ = self._request('POST', '/me/sendMail', token, msg)
+            status, _ = self._request('POST', '/me/sendMail', msg)
         except Exception:
             return 'ambiguous', None
         # Only explicit request rejection proves the service did not accept it.
@@ -146,7 +138,7 @@ class Graph:
         query = parse.urlencode({'$filter': "subject eq '" + tagged.replace("'", "''") + "'", '$select': 'subject,id,conversationId,sentDateTime,from', '$top': '100'})
         for attempt in range(4):
             try:
-                messages = self._messages('/me/mailFolders/sentitems/messages?' + query, token)
+                messages = self._messages('/me/mailFolders/sentitems/messages?' + query)
                 matches = [m for m in messages if m.get('subject') == tagged]
                 if len(matches) > 1:
                     return 'ambiguous', None
@@ -168,16 +160,15 @@ class Graph:
         if not (_enabled(self.config, 'graph') and mailbox and sent_id and conv and mailbox.lower() == str(self.sender).lower()):
             return []
         try:
-            token = self._token()
-            if not self._identity(token):
+            if not self._identity():
                 return []
-            status, sent = self._request('GET', '/me/messages/' + parse.quote(sent_id, safe='') + '?$select=id,conversationId,from,internetMessageId', token)
+            status, sent = self._request('GET', '/me/messages/' + parse.quote(sent_id, safe='') + '?$select=id,conversationId,from,internetMessageId')
             addr = ((sent.get('from') or {}).get('emailAddress') or {}).get('address', '')
             anchor = sent.get('internetMessageId')
             if status != 200 or sent.get('id') != sent_id or sent.get('conversationId') != conv or addr.lower() != mailbox.lower() or not anchor:
                 return []
             query = parse.urlencode({'$filter': "conversationId eq '" + conv.replace("'", "''") + "'", '$select': 'id,conversationId,from,sender,receivedDateTime,body,internetMessageHeaders', '$top': '100'})
-            messages = self._messages('/me/mailFolders/inbox/messages?' + query, token)
+            messages = self._messages('/me/mailFolders/inbox/messages?' + query)
             replies = []
             for m in messages:
                 sender = ((m.get('from') or {}).get('emailAddress') or {}).get('address', '')

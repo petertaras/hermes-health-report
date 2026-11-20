@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Restore opt-in Microsoft Graph delivery and mail approvals using Hermes public plugin OAuth, without the legacy token helper. Hermes buffers full responses before the plugin's fail-closed size checks; these are not peak-memory bounds.
+
 ## 0.1.1 preview
 
 - Declare Hermes Agent 0.23.2 as the minimum version and disclose what the plugin accesses.

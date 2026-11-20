@@ -27,6 +27,7 @@ scheduler: false
 maintenance: false
 approvals: false
 delivery:
+  graph: false
   smtp: false
   profile: false
 backup_unit: example-backup.service
@@ -61,12 +62,31 @@ List each vault explicitly under `vaults`. The report no longer discovers vaults
 
 ## Delivery
 
-- **Microsoft Graph:** Unavailable in 0.1.1. Remove the old `graph_token_helper` setting and keep `approvals: false`.
+- **Microsoft Graph:** Follow the OAuth setup below, then enable `delivery.graph`. It is off by default. Remove the old `graph_token_helper` setting; it is not used.
 - **SMTP:** Set `smtp.host`, `smtp.port`, `smtp.security` (`ssl` or `starttls`) and, if needed, `smtp.username`. Configure `EMAIL_PASSWORD` through Hermes on the report profile. Enable `delivery.smtp`.
 - **Profile:** Set `profile.target` to a `hermes send` destination. Enable `delivery.profile`.
 - **Local:** If no enabled channel accepts the report, the plugin writes a private HTML file in the profile report directory. If a send result is uncertain, it stops instead of trying another channel.
 
 No-agent cron scripts may not receive `EMAIL_PASSWORD` or `GITHUB_TOKEN` from Hermes. Without those secrets, an authenticated SMTP configuration is skipped and release lookups use the public GitHub API. Use local delivery for unattended reports unless your Hermes delivery route is available in that profile. Do not pass credentials in the cron command or put them in plugin configuration.
+
+### Microsoft Graph OAuth
+
+1. In Microsoft Entra, register a mobile/desktop public client with no client secret. Use an account type that supports the `/common` authority. Register `http://127.0.0.1/callback` for this public client. Hermes prints the callback URL with an OS-assigned port. Follow Microsoft's [loopback redirect guidance](https://learn.microsoft.com/en-us/entra/identity-platform/reply-url) for registering an HTTP IP-literal redirect.
+2. Add delegated Microsoft Graph permissions `User.Read`, `Mail.Send`, and `Mail.Read`, and obtain any tenant-required consent. The OAuth request also asks for `offline_access` so Hermes can refresh the grant. The client uses the Microsoft identity platform common v2 authorize and token endpoints and the `graph.microsoft.com` API host.
+3. Configure the application's public client ID as `HEALTH_REPORT_GRAPH_CLIENT_ID` in the selected profile's Hermes environment. This is an application ID, not a client secret. Set `sender` to the signed-in mailbox and configure recipients. Do not place tokens or credentials in the report config.
+4. As the same OS user and profile that will run reports, sign in interactively and check the grant:
+
+   ```sh
+   hermes -p example-lab auth add hermes-health-report:graph
+   hermes -p example-lab auth status hermes-health-report:graph
+   ```
+
+   Hermes owns and refreshes the profile-scoped grant; it will not start interactive sign-in from cron. If the browser is on a different host, use the port and SSH tunnel instructions printed by Hermes; see [OAuth over SSH](https://hermes-agent.nousresearch.com/docs/guides/oauth-over-ssh). Do not expose the callback listener publicly.
+5. Enable `delivery.graph`, check `hermes -p example-lab health-report status`, and verify delivery on a test profile. Leave `approvals: false` until your mail administrator verifies owner authentication on every delivery path as described in [approval rules](approvals.md). Graph delivery does not require approvals.
+
+To remove the local grant, run `hermes -p example-lab auth logout hermes-health-report:graph`. Revoke consent in Microsoft Entra separately if needed. The plugin uses Hermes public OAuth and does not invoke a token helper.
+
+Hermes reads each full Graph response into memory before the plugin checks its 1 MiB response and 4 MiB total conversation-page limits. Exceeding a limit fails closed; these limits are not peak-memory or transfer bounds.
 
 `health-report status` reports whether Microsoft Graph sending and reply access work, whether the Kanban board and maintenance profile are available, whether a backup unit is configured, which switches are on, and whether an unresolved delivery is recorded.
 
@@ -74,7 +94,7 @@ No-agent cron scripts may not receive `EMAIL_PASSWORD` or `GITHUB_TOKEN` from He
 
 Run `health-report setup` on the selected profile. It writes wrapper scripts into the profile `scripts` directory and creates or updates three named jobs. Optional maintenance runs at 07:30 on Saturday with an agent. The report runs at 08:30 on Saturday without an agent. The approval poll runs every 15 minutes without an agent. Jobs use the profile time zone.
 
-Preview the report on the profile first. Resolve open approval offers before you change maintenance settings or switch jobs. Set `scheduler: true` and run setup again to start the report job. Set `maintenance: true` only to enable scheduled maintenance. Keep `approvals: false` in 0.1.1.
+Preview the report on the profile first. Resolve open approval offers before you change maintenance settings or switch jobs. Set `scheduler: true` and run setup again to start the report job. Set `maintenance: true` only to enable scheduled maintenance. Enable `approvals` only after the administrator verification above; run setup again to start the approval poll.
 
 Setup refuses to replace a wrapper script with different contents, and it refuses to reuse a job name that is bound to a different script.
 

@@ -116,7 +116,6 @@ def report(home, config, kind, dry_run=False, output=None, *, preview_email=Fals
 def status(home, config):
     graph = delivery.Graph(home, config)
     return {'graph': graph.available(), 'graph_reply': graph.reply_available(),
-            'graph_unavailable_reason': delivery.GRAPH_UNAVAILABLE_REASON,
             'kanban': maintenance.available(home, config), 'backup_configured': bool(config.get('backup_unit')),
             'scheduler': config.get('scheduler') is True, 'approvals': config.get('approvals') is True,
             'delivery_pending': (home / NAME / 'delivery-pending.json').exists()}

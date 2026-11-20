@@ -1,6 +1,6 @@
 # Architecture
 
-The Microsoft Graph paths below describe the legacy flow. Graph delivery and new approvals are unavailable in 0.1.1.
+Graph delivery and reply approvals are independently opt-in and default to off.
 
 The command-line entry point loads settings from the selected profile, in `hermes-health-report/config.yaml` under the profile directory. State lives in that same directory: previews and local reports, `delivery-pending.json`, `approvals.sqlite3`, `maintenance-latest.json` and the NVMe media error history. No credentials are stored there.
 
@@ -29,6 +29,8 @@ Collectors are read-only. They call system tools such as `systemctl`, `journalct
 The renderer builds one self-contained HTML page. It escapes every collected value, shows a summary headline for each section above its details, and shows vault paths only in the email version. The local file and the default preview use the version without vault paths.
 
 ## Delivery
+
+A public-client PKCE grant is owned and refreshed by Hermes for the selected profile. The plugin uses Hermes' public credentialed request API for `graph.microsoft.com`, not the legacy token helper. Hermes buffers each full response before the plugin checks the 1 MiB per-response and 4 MiB combined conversation-page limits; these limits are not peak-memory or network bounds. An exceeded limit fails closed and no partial reply check is accepted.
 
 A live report run takes an exclusive lock and writes `delivery-pending.json` before the first send attempt, so a crash cannot lead to a second send of the same report. Microsoft Graph delivery tags the subject with the report ID and then looks for that exact subject in Sent Items. Only an exact, single match from the configured sender activates an approval offer.
 

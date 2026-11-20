@@ -104,7 +104,15 @@ Jobs use the profile time zone. All jobs require `scheduler: true`. Scheduled ma
 - **Network:** Collectors query the GitHub releases API and Chrome for Testing. They check Hindsight `/health` at the configured endpoint or the endpoint selected by Hindsight mode. Hermes plugin update checks may contact configured feeds and upstream repositories. Optional delivery sends report data to the configured SMTP server or Hermes destination. This release does not contact Microsoft Graph. There is no telemetry.
 - **Files outside plugin data:** Collectors inspect host mount and disk metadata, OS and APT metadata, the configured backup service journal, Hermes source and Git metadata, profile configuration and plugin manifests, browser caches, Hindsight configuration, and vault filenames and timestamps. They read `MEMORY.md` and `USER.md` only to count characters. Setup writes wrappers into the profile `scripts` directory and updates the cron store. Legacy approval processing reads Kanban board and task state.
 - **Background work and credentials:** Setup registers the jobs above. The completion hook can schedule a one-shot restart for an existing authorised card. The plugin does not start its own daemon or store credentials. It reads its declared secrets through Hermes, not from credential files.
-- **Remaining private interfaces (rule 9):** `cron.jobs` handles setup because the CLI does not provide a structured job listing with script ownership. `hermes_cli.kanban_db` remains because the public CLI cannot hold a live claim check across the plugin approval transaction. The plugin does not patch Hermes core.
+
+**Remaining internal Hermes interfaces (rule 9):** The plugin does not patch Hermes core.
+
+| Interface | Why it remains |
+| --- | --- |
+| `cron.jobs` | Setup checks which script owns a scheduled job before changing it. The cron CLI does not provide a structured listing with script ownership. |
+| `hermes_cli.kanban_db` | Legacy approval processing holds a live claim check across the approval transaction. The Kanban CLI cannot hold that check across the transaction. |
+| `hermes_cli.plugins_updates` | A child process uses Hermes' install provenance and update checks without writing profile state. On Hermes 0.23.2, `hermes plugins check-updates --json` also writes `plugin-update-checks/results.json` in the checked profile. |
+| `hermes_cli.browser_runtime.chromium_executable()` | A child process uses the same read-only selector as Hermes to resolve Chromium, including managed config overlays. `hermes doctor` shows the path in human-readable output but does not offer a structured selector. The report no longer calls private helpers to classify the selection. |
 
 ## Install and verify
 

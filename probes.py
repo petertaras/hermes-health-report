@@ -250,6 +250,8 @@ def _disk(config):
 
 
 def _plugin_checks(source, home, directory):
+    # `hermes plugins check-updates --json` writes a result cache in the target
+    # profile in v0.23.2. Use its check logic without the cache writer.
     # Report directory installs only. Emit each result before the next network
     # call so a slow source cannot discard the entire profile's results.
     script = '''
@@ -425,16 +427,16 @@ def _release(root, home):
     # not be reimplemented or guessed from the pin file.
     python = src / 'venv' / 'bin' / 'python'
     if python.exists() and src.exists():
-        script = ('import json; from hermes_cli import browser_runtime as b; '
-                  'p=b.chromium_executable(); '
-                  's=("configured" if b._configured_executable() else "managed" if b._pm_executable() else "baked image" if b._baked_executable() else "system fallback"); '
-                  'print(json.dumps([p,s]))')
+        script = ('import json; from hermes_cli.browser_runtime import chromium_executable; '
+                  'print(json.dumps(chromium_executable()))')
         # env is passed in an isolated interpreter without changing the process environment.
         try:
             p = subprocess.run([str(python), '-c', script], cwd=src, env={**os.environ, 'HERMES_HOME': str(home), 'PYTHONDONTWRITEBYTECODE': '1'}, capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
             if p.returncode == 0:
-                selected, source = json.loads(p.stdout.strip().splitlines()[-1])
-                path = selected or ''
+                selected = json.loads(p.stdout.strip().splitlines()[-1])
+                if selected is None or isinstance(selected, str):
+                    path = selected or ''
+                    source = 'Hermes runtime selection' if path else 'none selected by Hermes'
         except (OSError, subprocess.SubprocessError, ValueError, IndexError, TypeError):
             pass
     if not path and not source:
